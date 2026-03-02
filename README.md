@@ -83,12 +83,11 @@ Then commit the updated `csv_files.zip`.
 
 ### Fair-comparison group
 
-All four return `Array<Hash>` with Symbol keys, numeric conversion,
-whitespace stripping, and empty-value removal — equivalent output.
+All four return `Array<Hash>` with Symbol keys and numeric conversion — equivalent output.
 
 | Adapter | Mechanism | File |
 |---|---|---|
-| `CSV.table` | Ruby stdlib wrapper | `adapters/ruby_csv/csv_table.rb` |
+| `CSV.table` | `CSV.table(file).map(&:to_h)` | `adapters/ruby_csv/csv_table.rb` |
 | `SmarterCSV` (C) | `SmarterCSV.process(file)` | `adapters/smarter_csv/default.rb` |
 | `SmarterCSV` (Ruby) | `SmarterCSV.process(file, acceleration: false)` | `adapters/smarter_csv/ruby_path.rb` |
 | `ZSV + wrapper` | ZSV raw + post-processing | `adapters/zsv/zsv_wrapped.rb` |

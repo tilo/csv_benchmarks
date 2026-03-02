@@ -12,6 +12,7 @@ module Adapters
     # speed advantage (no GC pauses during its run) — noted in benchmark output.
     class ZsvRaw < Base
       def name        = "ZSV.read (raw arrays)"
+      def label       = "ZSV.read"
       def output_type = :raw
 
       def available?

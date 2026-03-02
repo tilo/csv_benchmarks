@@ -6,7 +6,8 @@ require "csv"
 module Adapters
   module RubyCSV
     class CsvRead < Base
-      def name        = "CSV.read (arrays)"
+      def name        = "CSV.read (raw arrays)"
+      def label       = "CSV.read"
       def output_type = :raw
 
       def call(filepath)

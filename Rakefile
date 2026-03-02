@@ -4,18 +4,24 @@ require "rspec/core/rake_task"
 
 RSpec::Core::RakeTask.new(:spec)
 
-desc "Run equivalence specs then all benchmarks (specs must pass first)"
-task bench: :spec do
+desc "Run all benchmarks (saves JSON to results/)"
+task :bench do
   ruby "benchmarks/run_all.rb"
 end
 
-desc "Run cross-parser fair-comparison (specs must pass first)"
-task compare: :spec do
+desc "Format benchmark results as Markdown: rake report[path/to/results.json]"
+task :report, [:file] do |_t, args|
+  file_arg = args[:file] ? " #{args[:file]}" : ""
+  ruby "benchmarks/format_results.rb#{file_arg}"
+end
+
+desc "Run cross-parser fair-comparison"
+task :compare do
   ruby "benchmarks/compare_parsers.rb"
 end
 
-desc "Run multi-version SmarterCSV comparison (specs must pass first)"
-task versions: :spec do
+desc "Run multi-version SmarterCSV comparison"
+task :versions do
   ruby "benchmarks/smarter_csv_versions.rb"
 end
 

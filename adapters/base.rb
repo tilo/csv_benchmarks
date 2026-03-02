@@ -7,6 +7,9 @@ module Adapters
       raise NotImplementedError, "#{self.class}#name not implemented"
     end
 
+    # Short label for table column headers. Override for a compact display name.
+    def label = name
+
     # Parse the CSV file at filepath.
     #   :equivalent adapters → Array<Hash> with symbol keys
     #   :raw adapters        → Array<Array<String>>

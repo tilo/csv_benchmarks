@@ -6,7 +6,8 @@ require "csv"
 module Adapters
   module RubyCSV
     class CsvHashes < Base
-      def name        = "CSV.read (hashes, string keys)"
+      def name        = "CSV.read (raw hashes, string keys)"
+      def label       = "CSV.hashes"
       def output_type = :raw  # string keys, no numeric conversion — not equivalent to SmarterCSV
 
       def call(filepath)

@@ -19,7 +19,8 @@ module Adapters
     # on large files. GC is disabled during ZSV calls. This gives ZSV a slight
     # speed advantage (no GC pauses during its run) — noted in benchmark output.
     class ZsvWrapped < Base
-      def name = "ZSV + wrapper (smarter_csv-equivalent)"
+      def name  = "ZSV + wrapper (smarter_csv-equivalent)"
+      def label = "ZSV+wrapper"
 
       def available?
         require "zsv"

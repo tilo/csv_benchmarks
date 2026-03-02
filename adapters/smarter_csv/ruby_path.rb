@@ -8,7 +8,8 @@ module Adapters
     # SmarterCSV with the C acceleration disabled. Measures the pure-Ruby
     # parsing path so you can quantify the C extension's contribution.
     class RubyPath < Base
-      def name = "SmarterCSV.process (Ruby path, acceleration: false)"
+      def name  = "SmarterCSV.process (no acceleration)"
+      def label = "SmarterCSV/Rb"
 
       def call(filepath)
         SmarterCSV.process(filepath, acceleration: false)

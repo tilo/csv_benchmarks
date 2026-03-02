@@ -8,7 +8,8 @@ module Adapters
     # SmarterCSV with C acceleration (default). This is the reference output
     # that all :equivalent adapters must match.
     class Default < Base
-      def name = "SmarterCSV.process (C accelerated)"
+      def name  = "SmarterCSV.process (C accelerated)"
+      def label = "SmarterCSV/C"
 
       def call(filepath)
         SmarterCSV.process(filepath)
