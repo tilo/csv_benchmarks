@@ -1,0 +1,24 @@
+# Bundler
+.bundle/
+vendor/bundle/
+Gemfile.lock
+
+# CSV benchmark files — tracked as csv_files.zip instead
+csv_files/**/*.csv
+csv_files/**/*.tsv
+
+# Results (commit selectively)
+results/*.md
+results/*.json
+
+# Ruby
+*.gem
+*.rbc
+.ruby-version
+
+# macOS
+.DS_Store
+
+CSV_BENCHMARKS_PROJECT_PLAN.md
+.claude/
+CLAUDE.md
