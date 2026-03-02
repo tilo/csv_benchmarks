@@ -3,7 +3,7 @@
 #
 # benchmarks/run_all.rb — Run all available adapters against all csv_files/
 #
-# Output: Markdown table to STDOUT and results/YYYY-MM-DD_rubyX.Y.Z.md
+# Output: Markdown tables to STDOUT and results/YYYY-MM-DD_rubyX.Y.Z.md
 #
 # Usage:
 #   ruby benchmarks/run_all.rb
@@ -77,8 +77,7 @@ end
 
 def count_rows(filepath)
   # Fast physical-line count; accurate for files without embedded newlines.
-  # For variation_embedded_newlines_20k.csv this is approximate — acceptable
-  # for display purposes.
+  # For embedded_newlines_20k.csv this is approximate — acceptable for display.
   n = 0
   File.foreach(filepath) { n += 1 }
   [n - 1, 0].max
@@ -117,34 +116,37 @@ def speedup_label(ref_time, adapter_time)
   end
 end
 
-# ── Banner ────────────────────────────────────────────────────────────────────
+# ── Output helpers ────────────────────────────────────────────────────────────
 
-smarter_version = begin
-  SmarterCSV::VERSION
-rescue StandardError
-  "?"
+# Collect all output so it can be written to both STDOUT and the results file.
+output_lines = []
+
+def emit(line = "", output_lines)
+  puts line
+  output_lines << line
 end
 
-banner_lines = [
-  "# CSV Benchmarks",
-  "",
-  "- Date: #{Time.now.strftime('%Y-%m-%d %H:%M:%S')}",
-  "- Ruby: #{RUBY_VERSION} [#{RUBY_PLATFORM}]",
-  "- SmarterCSV: #{smarter_version}",
-  "- Warmup: #{WARMUP} iteration(s), Measured: best of #{ITERATIONS}",
-  "- Adapters: #{ADAPTERS.map(&:name).join(', ')}",
-  "",
-  "> **Note:** ZSV results (when present) have GC disabled during calls due to",
-  "> a known GC marking bug in zsv-ruby 1.3.1 on Ruby 3.4.x. This gives ZSV",
-  "> a slight speed advantage (no GC pauses). All other adapters run with GC.",
-  "",
-]
+# ── Banner ────────────────────────────────────────────────────────────────────
 
-puts banner_lines.join("\n")
+smarter_version = SmarterCSV::VERSION rescue "?"
+
+emit "# CSV Benchmarks", output_lines
+emit "", output_lines
+emit "- Date: #{Time.now.strftime('%Y-%m-%d %H:%M:%S')}", output_lines
+emit "- Ruby: #{RUBY_VERSION} [#{RUBY_PLATFORM}]", output_lines
+emit "- SmarterCSV: #{smarter_version}", output_lines
+emit "- Warmup: #{WARMUP} iteration(s), Measured: best of #{ITERATIONS}", output_lines
+emit "- Adapters: #{ADAPTERS.map(&:name).join(', ')}", output_lines
+emit "", output_lines
+if ADAPTERS.any? { |a| a.is_a?(Adapters::ZSV::ZsvRaw) || a.is_a?(Adapters::ZSV::ZsvWrapped) }
+  emit "> **Note:** ZSV results have GC disabled during calls (zsv-ruby 1.3.1 GC bug", output_lines
+  emit "> on Ruby 3.4.x). This gives ZSV a slight speed advantage — no GC pauses.", output_lines
+  emit "", output_lines
+end
 
 # ── Run benchmarks ────────────────────────────────────────────────────────────
 
-# results[file][adapter_name] = { time:, rows_per_sec: }
+# results[filename] = { _rows: N, adapter_name => { time:, rows_per_sec: }, ... }
 results = {}
 
 CSV_FILES.each do |filepath|
@@ -168,25 +170,34 @@ CSV_FILES.each do |filepath|
   $stderr.puts " done"
 end
 
-# ── Output tables ─────────────────────────────────────────────────────────────
+# ── Reference adapter (SmarterCSV C-accelerated) ──────────────────────────────
 
-# Reference adapter for speedup column
-ref_adapter = Adapters::SmarterCSVAdapter::Default.new
-ref_name    = ref_adapter.name
+ref_name = Adapters::SmarterCSVAdapter::Default.new.name
 
-col_w    = 12
-name_w   = 36
+# ── Table helpers ─────────────────────────────────────────────────────────────
 
-header = "| #{"File".ljust(name_w)} | #{"Rows".rjust(7)} |" +
-         ADAPTERS.map { |a| " #{a.name.slice(0, col_w - 2).ljust(col_w - 2)} |" }.join +
-         " vs SmarterCSV |"
-sep    = "|#{'-' * (name_w + 2)}|#{'-' * 9}|" +
-         ADAPTERS.map { "#{'-' * (col_w + 2)}|" }.join +
-         "#{'-' * 16}|"
+name_w = [36, CSV_FILES.map { |f| File.basename(f).length }.max].max
+col_w  = 10
 
-puts "## Full Results\n\n"
-puts header
-puts sep
+def table_header(name_w, col_w, adapters, extra_cols = [])
+  row = "| #{"File".ljust(name_w)} | #{"Rows".rjust(7)} |"
+  adapters.each { |a| row += " #{a.name.slice(0, col_w).ljust(col_w)} |" }
+  extra_cols.each { |c| row += " #{c} |" }
+  row
+end
+
+def table_sep(name_w, col_w, adapters, extra_cols = [])
+  row = "|#{'-' * (name_w + 2)}|#{'-' * 9}|"
+  adapters.each { row += "#{'-' * (col_w + 2)}|" }
+  extra_cols.each { |c| row += "#{'-' * (c.length + 2)}|" }
+  row
+end
+
+# ── Full Results table (seconds) ──────────────────────────────────────────────
+
+emit "## Full Results (seconds, best of #{ITERATIONS} runs)\n", output_lines
+emit table_header(name_w, col_w, ADAPTERS, ["vs SmarterCSV"]), output_lines
+emit table_sep(name_w, col_w, ADAPTERS, ["vs SmarterCSV"]), output_lines
 
 results.each do |filename, data|
   rows     = data[:_rows]
@@ -194,55 +205,65 @@ results.each do |filename, data|
 
   row = "| #{filename.ljust(name_w)} | #{rows.to_s.rjust(7)} |"
   ADAPTERS.each do |adapter|
-    entry = data[adapter.name]
-    cell  = entry&.dig(:time) ? fmt_time(entry[:time]) : "    N/A"
-    row  += " #{cell.rjust(col_w - 2)} |"
+    t    = data.dig(adapter.name, :time)
+    cell = t ? fmt_time(t) : "N/A"
+    row += " #{cell.rjust(col_w)} |"
   end
 
-  speedup = ref_time ? speedup_label(ref_time, ref_time) : "N/A"
-  row += " #{speedup.ljust(14)} |"
-  puts row
+  # Speedup column: each non-reference adapter's time relative to SmarterCSV
+  if ref_time
+    parts = ADAPTERS.reject { |a| a.name == ref_name }.filter_map do |adapter|
+      t = data.dig(adapter.name, :time)
+      next unless t && t > 0
+      "#{adapter.name.slice(0, 12)}: #{speedup_label(ref_time, t)}"
+    end
+    speedup_cell = parts.empty? ? "ref" : parts.join(" | ")
+  else
+    speedup_cell = "N/A"
+  end
+
+  row += " #{speedup_cell} |"
+  emit row, output_lines
 end
 
-puts "\n*(times = best of #{ITERATIONS} runs, seconds)*\n"
+emit "", output_lines
 
-# ── Rows/second table ─────────────────────────────────────────────────────────
+# ── Throughput table (rows/second) ────────────────────────────────────────────
 
-puts "\n## Throughput (rows/second)\n\n"
-puts header.sub("| vs SmarterCSV |", "|")
-puts sep.sub("#{'-' * 16}|", "")
+emit "## Throughput (rows/second)\n", output_lines
+emit table_header(name_w, col_w, ADAPTERS), output_lines
+emit table_sep(name_w, col_w, ADAPTERS), output_lines
 
 results.each do |filename, data|
   rows = data[:_rows]
   row  = "| #{filename.ljust(name_w)} | #{rows.to_s.rjust(7)} |"
   ADAPTERS.each do |adapter|
-    entry = data[adapter.name]
-    cell  = entry&.dig(:rows_per_sec) ? format("%10.0f", entry[:rows_per_sec]) : "       N/A"
-    row  += " #{cell.rjust(col_w - 2)} |"
+    t    = data.dig(adapter.name, :time)
+    cell = t ? fmt_rows_per_sec(rows, t) : "N/A"
+    row += " #{cell.rjust(col_w)} |"
   end
-  puts row
+  emit row, output_lines
 end
+
+emit "", output_lines
 
 # ── Save to file ──────────────────────────────────────────────────────────────
 
 FileUtils.mkdir_p(File.join(root, "results"))
 timestamp   = Time.now.strftime("%Y-%m-%d")
 ruby_tag    = "ruby#{RUBY_VERSION}"
+
 result_path = File.join(root, "results", "#{timestamp}_#{ruby_tag}.md")
+File.write(result_path, output_lines.join("\n") + "\n")
+puts "Results saved to: #{result_path}"
 
-# Capture all output to file as well (re-run output collection)
-File.open(result_path, "w") do |f|
-  f.puts banner_lines
-  f.puts "*(Full output captured — re-run `ruby benchmarks/run_all.rb` for formatted tables)*"
-  f.puts
-  f.puts JSON.pretty_generate(
-    ruby: RUBY_VERSION,
-    platform: RUBY_PLATFORM,
-    smarter_csv: smarter_version,
-    warmup: WARMUP,
-    iterations: ITERATIONS,
-    results: results.transform_values { |v| v.reject { |k, _| k == :_rows } }
-  )
-end
-
-puts "\nResults saved to: #{result_path}"
+json_path = File.join(root, "results", "#{timestamp}_#{ruby_tag}.json")
+File.write(json_path, JSON.pretty_generate(
+  ruby:        RUBY_VERSION,
+  platform:    RUBY_PLATFORM,
+  smarter_csv: smarter_version,
+  warmup:      WARMUP,
+  iterations:  ITERATIONS,
+  results:     results.transform_values { |v| v.reject { |k, _| k == :_rows } }
+))
+puts "JSON saved to:    #{json_path}"
