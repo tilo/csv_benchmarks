@@ -13,8 +13,14 @@ module Adapters
     # Parse the CSV file at filepath.
     #   :equivalent adapters → Array<Hash> with symbol keys
     #   :raw adapters        → Array<Array<String>>
-    def call(filepath)
+    def call(filepath, **opts)
       raise NotImplementedError, "#{self.class}#call not implemented"
+    end
+
+    # Return false if this adapter cannot handle the given per-file options.
+    # Benchmarks record N/A for that file rather than erroring.
+    def accepts?(**opts)
+      true
     end
 
     # Return false if the required gem/library is not installed.

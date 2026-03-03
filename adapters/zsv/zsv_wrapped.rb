@@ -29,7 +29,11 @@ module Adapters
         false
       end
 
-      def call(filepath)
+      def accepts?(**opts)
+        opts.fetch(:col_sep, ",") == ","
+      end
+
+      def call(filepath, **_)
         GC.disable
         raw = ::ZSV.read(filepath)
         GC.enable

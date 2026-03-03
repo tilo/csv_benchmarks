@@ -10,8 +10,8 @@ module Adapters
       def label       = "CSV.hashes"
       def output_type = :raw  # string keys, no numeric conversion — not equivalent to SmarterCSV
 
-      def call(filepath)
-        CSV.read(filepath, headers: true).map(&:to_h)
+      def call(filepath, col_sep: ",", **_)
+        CSV.read(filepath, headers: true, col_sep: col_sep).map(&:to_h)
       end
     end
   end

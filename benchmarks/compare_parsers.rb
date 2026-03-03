@@ -47,15 +47,14 @@ abort "SmarterCSV adapter not available — cannot run comparison" unless REFERE
 
 # ── Parameters ────────────────────────────────────────────────────────────────
 
-WARMUP         = BenchmarkConfig::WARMUP
-ITERATIONS     = BenchmarkConfig::ITERATIONS
-
-EXCLUDED_FILES = BenchmarkConfig::EXCLUDE_FILES
+WARMUP       = BenchmarkConfig::WARMUP
+ITERATIONS   = BenchmarkConfig::ITERATIONS
+FILE_OPTIONS = BenchmarkConfig::FILE_OPTIONS
 
 CSV_FILES = (
-  Dir[File.join(root, "csv_files", "actual",    "*.csv")] +
-  Dir[File.join(root, "csv_files", "synthetic", "*.csv")]
-).reject { |f| EXCLUDED_FILES.include?(File.basename(f)) }.sort
+  Dir[File.join(root, "csv_files", "actual",    "*.{csv,tsv}")] +
+  Dir[File.join(root, "csv_files", "synthetic", "*.{csv,tsv}")]
+).sort
 
 if CSV_FILES.empty?
   warn "No CSV files found in csv_files/actual/ or csv_files/synthetic/."
@@ -70,12 +69,12 @@ def count_rows(filepath)
   [n - 1, 0].max
 end
 
-def timed_run(adapter, filepath)
-  WARMUP.times { adapter.call(filepath) }
+def timed_run(adapter, filepath, opts = {})
+  WARMUP.times { adapter.call(filepath, **opts) }
   times = ITERATIONS.times.map do
     GC.start
     GC.compact rescue nil
-    Benchmark.realtime { adapter.call(filepath) }
+    Benchmark.realtime { adapter.call(filepath, **opts) }
   end
   times.min
 end
@@ -102,9 +101,12 @@ CSV_FILES.each do |filepath|
   $stderr.print "  #{filename} (#{rows} rows)..."
   $stderr.flush
 
+  file_opts = FILE_OPTIONS.fetch(filename, {})
+
   FAIR_GROUP.each do |adapter|
-    t = timed_run(adapter, filepath)
-    timings[filename][:times][adapter.name] = t
+    if adapter.accepts?(**file_opts)
+      timings[filename][:times][adapter.name] = timed_run(adapter, filepath, file_opts)
+    end
   end
 
   $stderr.puts " done"

@@ -11,8 +11,8 @@ module Adapters
       def name  = "SmarterCSV.process (no acceleration)"
       def label = "SmarterCSV/Rb"
 
-      def call(filepath)
-        SmarterCSV.process(filepath, acceleration: false)
+      def call(filepath, **opts)
+        SmarterCSV.process(filepath, opts.merge(acceleration: false))
       end
     end
   end

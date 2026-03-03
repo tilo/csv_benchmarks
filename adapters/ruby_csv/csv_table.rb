@@ -10,8 +10,8 @@ module Adapters
       def label       = "CSV.table"
       def output_type = :raw
 
-      def call(filepath)
-        CSV.table(filepath).map(&:to_h)
+      def call(filepath, col_sep: ",", **_)
+        CSV.table(filepath, col_sep: col_sep).map(&:to_h)
       end
     end
   end

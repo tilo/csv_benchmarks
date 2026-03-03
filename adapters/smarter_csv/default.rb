@@ -11,8 +11,8 @@ module Adapters
       def name  = "SmarterCSV.process (C accelerated)"
       def label = "SmarterCSV/C"
 
-      def call(filepath)
-        SmarterCSV.process(filepath)
+      def call(filepath, **opts)
+        SmarterCSV.process(filepath, opts)
       end
     end
   end

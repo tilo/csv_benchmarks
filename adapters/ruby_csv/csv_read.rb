@@ -10,8 +10,8 @@ module Adapters
       def label       = "CSV.read"
       def output_type = :raw
 
-      def call(filepath)
-        CSV.read(filepath)
+      def call(filepath, col_sep: ",", **_)
+        CSV.read(filepath, col_sep: col_sep)
       end
     end
   end

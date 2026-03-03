@@ -26,17 +26,15 @@ require_relative "../config/benchmark"
 
 # ── Version list ──────────────────────────────────────────────────────────────
 
-VERSIONS = (ENV["VERSIONS"]&.split(",")&.map(&:strip) || BenchmarkConfig::SMARTER_CSV_VERSIONS).freeze
-
-WARMUP         = BenchmarkConfig::WARMUP
-ITERATIONS     = BenchmarkConfig::ITERATIONS
-
-EXCLUDED_FILES = BenchmarkConfig::EXCLUDE_FILES
+VERSIONS     = (ENV["VERSIONS"]&.split(",")&.map(&:strip) || BenchmarkConfig::SMARTER_CSV_VERSIONS).freeze
+WARMUP       = BenchmarkConfig::WARMUP
+ITERATIONS   = BenchmarkConfig::ITERATIONS
+FILE_OPTIONS = BenchmarkConfig::FILE_OPTIONS
 
 CSV_FILES = (
-  Dir[File.join(root, "csv_files", "actual",    "*.csv")] +
-  Dir[File.join(root, "csv_files", "synthetic", "*.csv")]
-).reject { |f| EXCLUDED_FILES.include?(File.basename(f)) }.sort
+  Dir[File.join(root, "csv_files", "actual",    "*.{csv,tsv}")] +
+  Dir[File.join(root, "csv_files", "synthetic", "*.{csv,tsv}")]
+).sort
 
 if CSV_FILES.empty?
   warn "No CSV files found in csv_files/actual/ or csv_files/synthetic/."
@@ -87,13 +85,15 @@ VERSIONS.each do |version|
     CSV_FILES.each do |filepath|
       filename = File.basename(filepath)
 
+      file_opts = FILE_OPTIONS.fetch(filename, {})
+
       begin
-        WARMUP.times { SmarterCSV.process(filepath) }
+        WARMUP.times { SmarterCSV.process(filepath, file_opts) }
 
         best = ITERATIONS.times.map do
           GC.start
           GC.compact rescue nil
-          Benchmark.realtime { SmarterCSV.process(filepath) }
+          Benchmark.realtime { SmarterCSV.process(filepath, file_opts) }
         end.min
 
         timings[filename] = best

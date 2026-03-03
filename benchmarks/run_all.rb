@@ -60,20 +60,18 @@ unavailable.each { |a| warn "SKIP: #{a.name} (not available)" }
 
 WARMUP         = BenchmarkConfig::WARMUP
 ITERATIONS     = BenchmarkConfig::ITERATIONS
+FILE_OPTIONS   = BenchmarkConfig::FILE_OPTIONS
 
 # ── CSV file list ─────────────────────────────────────────────────────────────
 #
-# Scans csv_files/actual/ and csv_files/synthetic/ for .csv files.
-# Excludes files that require non-default separators (multi-char, tab) since
-# those are incompatible with default adapter options and with ZSV.
-# Add them to a custom adapter + benchmark script if needed.
-
-EXCLUDED_FILES = BenchmarkConfig::EXCLUDE_FILES
+# Scans csv_files/actual/ and csv_files/synthetic/ for .csv and .tsv files.
+# Adapters that cannot handle a file's separator declare accepts?(**opts) = false
+# and are recorded as N/A for that file rather than being excluded globally.
 
 CSV_FILES = (
-  Dir[File.join(root, "csv_files", "actual",    "*.csv")] +
-  Dir[File.join(root, "csv_files", "synthetic", "*.csv")]
-).reject { |f| EXCLUDED_FILES.include?(File.basename(f)) }.sort
+  Dir[File.join(root, "csv_files", "actual",    "*.{csv,tsv}")] +
+  Dir[File.join(root, "csv_files", "synthetic", "*.{csv,tsv}")]
+).sort
 
 if CSV_FILES.empty?
   warn "No CSV files found in csv_files/actual/ or csv_files/synthetic/."
@@ -90,15 +88,15 @@ def count_rows(filepath)
   [n - 1, 0].max
 end
 
-def timed_run(adapter, filepath)
+def timed_run(adapter, filepath, opts = {})
   # Warmup — not measured; critical for C extensions (see project plan)
-  WARMUP.times { adapter.call(filepath) }
+  WARMUP.times { adapter.call(filepath, **opts) }
 
   # Measured runs — take minimum to reduce GC/scheduler noise
   times = ITERATIONS.times.map do
     GC.start
     GC.compact rescue nil # Ruby 2.7+
-    Benchmark.realtime { adapter.call(filepath) }
+    Benchmark.realtime { adapter.call(filepath, **opts) }
   end
 
   times.min
@@ -117,9 +115,15 @@ CSV_FILES.each do |filepath|
   $stderr.print "Benchmarking #{filename} (#{rows} rows)..."
   $stderr.flush
 
+  file_opts = FILE_OPTIONS.fetch(filename, {})
+
   ADAPTERS.each do |adapter|
+    unless adapter.accepts?(**file_opts)
+      results[filename][adapter.name] = { time: nil, rows_per_sec: nil }
+      next
+    end
     begin
-      t = timed_run(adapter, filepath)
+      t = timed_run(adapter, filepath, file_opts)
       results[filename][adapter.name] = { time: t, rows_per_sec: rows / t }
     rescue StandardError => e
       warn "\n  ERROR running #{adapter.name} on #{filename}: #{e.message}"
