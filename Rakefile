@@ -14,6 +14,9 @@ task :report, [:file] do |_t, args|
   file_arg = args[:file] ? " #{args[:file]}" : ""
   ruby "benchmarks/format_results.rb#{file_arg}"
 end
+task :results, [:file] => [] do |_t, args|
+  Rake::Task[:report].invoke(args[:file])
+end
 
 desc "Run cross-parser fair-comparison"
 task :compare do

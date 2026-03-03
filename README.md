@@ -147,7 +147,8 @@ cd ~/GitHub/zsv-ruby && bundle install && rake compile
 1. Create `adapters/<parser_name>/<mechanism>.rb` inheriting `Adapters::Base`.
 2. Implement `name`, `call(filepath)`, and optionally `available?` and
    `output_type` (default: `:equivalent`).
-3. Add the adapter to the `ALL_ADAPTERS` array in `benchmarks/run_all.rb`.
+3. Add the adapter key to `BenchmarkConfig::ADAPTERS` in `config/benchmark.rb`
+   and add a corresponding entry to `ADAPTER_REGISTRY` in `benchmarks/run_all.rb`.
 4. If `:equivalent`, add a spec file in `spec/adapters/` using the
    `"equivalent to SmarterCSV"` shared example.
 
@@ -199,13 +200,43 @@ VERSIONS=1.14.4,1.16.0 ruby benchmarks/smarter_csv_versions.rb
 
 ---
 
+## Configuration
+
+All benchmark parameters live in `config/benchmark.rb`:
+
+| Constant | Default | Effect |
+|---|---|---|
+| `WARMUP` | `2` | Discarded warm-up runs before measurement |
+| `ITERATIONS` | `10` | Measured runs; minimum time is reported |
+| `EXCLUDE_FILES` | 2 files | Files skipped by all benchmarks (non-default separators) |
+| `ADAPTERS` | all 7 | Comment out any key to exclude it from `rake bench` |
+| `SMARTER_CSV_VERSIONS` | 3 versions | Versions compared by `rake versions` |
+
+To skip an adapter, comment out its line:
+
+```ruby
+ADAPTERS = %w[
+  ruby_csv/csv_read
+  # ruby_csv/csv_hashes   # skip this one
+  ...
+].freeze
+```
+
+To override the version list at runtime without editing the file:
+
+```bash
+VERSIONS=1.14.4,1.16.0 rake versions
+```
+
+---
+
 ## Benchmark Methodology
 
 - **Warmup:** 2 discarded runs before measurement. C extensions benefit
   disproportionately from warmup (cold I-cache, branch predictors, Ruby object
   caches). Without warmup, C extension times are inflated 1.6×–7.2× versus
   warmed numbers — skipping warmup understates C extension performance.
-- **Measurement:** Best of 6 timed runs (minimum time, not mean). Minimum is
+- **Measurement:** Best of 10 timed runs (minimum time, not mean). Minimum is
   most reproducible and least affected by GC pauses or OS scheduler noise.
 - **Between runs:** `GC.start` (and `GC.compact` where supported) to level
   the playing field across adapters.
@@ -252,6 +283,8 @@ csv-benchmarks/
 │   │   └── equivalence_helper.rb
 │   ├── adapters/           # One spec per :equivalent adapter
 │   └── fixtures/           # Small hand-crafted CSV files for specs
+├── config/
+│   └── benchmark.rb        # Central benchmark configuration
 ├── benchmarks/
 │   ├── run_all.rb          # All adapters × all csv_files/
 │   ├── compare_parsers.rb  # Fair-group comparison

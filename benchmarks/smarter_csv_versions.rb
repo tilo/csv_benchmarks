@@ -22,14 +22,16 @@ require "csv"
 
 root = File.expand_path("..", __dir__)
 
+require_relative "../config/benchmark"
+
 # ── Version list ──────────────────────────────────────────────────────────────
 
-VERSIONS = (ENV["VERSIONS"] || "1.14.4,1.15.2,1.16.0").split(",").map(&:strip).freeze
+VERSIONS = (ENV["VERSIONS"]&.split(",")&.map(&:strip) || BenchmarkConfig::SMARTER_CSV_VERSIONS).freeze
 
-WARMUP     = 2
-ITERATIONS = 6
+WARMUP         = BenchmarkConfig::WARMUP
+ITERATIONS     = BenchmarkConfig::ITERATIONS
 
-EXCLUDED_FILES = %w[multi_char_separator_20k.csv tab_separated_20k.tsv].freeze
+EXCLUDED_FILES = BenchmarkConfig::EXCLUDE_FILES
 
 CSV_FILES = (
   Dir[File.join(root, "csv_files", "actual",    "*.csv")] +

@@ -23,6 +23,8 @@ $LOAD_PATH.unshift(root)
 zsv_lib = File.join(Dir.home, "GitHub", "zsv-ruby", "lib")
 $LOAD_PATH.unshift(zsv_lib) if Dir.exist?(zsv_lib) && !$LOAD_PATH.include?(zsv_lib)
 
+require_relative "../config/benchmark"
+
 require "adapters/ruby_csv/csv_read"
 require "adapters/ruby_csv/csv_hashes"
 require "adapters/ruby_csv/csv_table"
@@ -32,16 +34,22 @@ require "adapters/zsv/zsv_raw"
 require "adapters/zsv/zsv_wrapped"
 
 # ── Adapter registry ──────────────────────────────────────────────────────────
+#
+# Keys match BenchmarkConfig::ADAPTERS entries.
+# To add a new adapter: require it above, add an entry here, and add the key
+# to BenchmarkConfig::ADAPTERS in config/benchmark.rb.
 
-ALL_ADAPTERS = [
-  Adapters::RubyCSV::CsvRead.new,
-  Adapters::RubyCSV::CsvHashes.new,
-  Adapters::RubyCSV::CsvTable.new,
-  Adapters::SmarterCSVAdapter::Default.new,
-  Adapters::SmarterCSVAdapter::RubyPath.new,
-  Adapters::ZSV::ZsvRaw.new,
-  Adapters::ZSV::ZsvWrapped.new,
-].freeze
+ADAPTER_REGISTRY = {
+  "ruby_csv/csv_read"     => Adapters::RubyCSV::CsvRead.new,
+  "ruby_csv/csv_hashes"   => Adapters::RubyCSV::CsvHashes.new,
+  "ruby_csv/csv_table"    => Adapters::RubyCSV::CsvTable.new,
+  "smarter_csv/default"   => Adapters::SmarterCSVAdapter::Default.new,
+  "smarter_csv/ruby_path" => Adapters::SmarterCSVAdapter::RubyPath.new,
+  "zsv/zsv_raw"           => Adapters::ZSV::ZsvRaw.new,
+  "zsv/zsv_wrapped"       => Adapters::ZSV::ZsvWrapped.new,
+}.freeze
+
+ALL_ADAPTERS = BenchmarkConfig::ADAPTERS.filter_map { |key| ADAPTER_REGISTRY[key] }.freeze
 
 ADAPTERS = ALL_ADAPTERS.select(&:available?)
 
@@ -50,8 +58,8 @@ unavailable.each { |a| warn "SKIP: #{a.name} (not available)" }
 
 # ── Benchmark parameters ──────────────────────────────────────────────────────
 
-WARMUP     = 2
-ITERATIONS = 10
+WARMUP         = BenchmarkConfig::WARMUP
+ITERATIONS     = BenchmarkConfig::ITERATIONS
 
 # ── CSV file list ─────────────────────────────────────────────────────────────
 #
@@ -60,10 +68,7 @@ ITERATIONS = 10
 # those are incompatible with default adapter options and with ZSV.
 # Add them to a custom adapter + benchmark script if needed.
 
-EXCLUDED_FILES = %w[
-  multi_char_separator_20k.csv
-  tab_separated_20k.tsv
-].freeze
+EXCLUDED_FILES = BenchmarkConfig::EXCLUDE_FILES
 
 CSV_FILES = (
   Dir[File.join(root, "csv_files", "actual",    "*.csv")] +

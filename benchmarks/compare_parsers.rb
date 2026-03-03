@@ -26,6 +26,8 @@ $LOAD_PATH.unshift(root)
 zsv_lib = File.join(Dir.home, "GitHub", "zsv-ruby", "lib")
 $LOAD_PATH.unshift(zsv_lib) if Dir.exist?(zsv_lib) && !$LOAD_PATH.include?(zsv_lib)
 
+require_relative "../config/benchmark"
+
 require "adapters/ruby_csv/csv_table"
 require "adapters/smarter_csv/default"
 require "adapters/zsv/zsv_wrapped"
@@ -45,10 +47,10 @@ abort "SmarterCSV adapter not available — cannot run comparison" unless REFERE
 
 # ── Parameters ────────────────────────────────────────────────────────────────
 
-WARMUP     = 2
-ITERATIONS = 6
+WARMUP         = BenchmarkConfig::WARMUP
+ITERATIONS     = BenchmarkConfig::ITERATIONS
 
-EXCLUDED_FILES = %w[multi_char_separator_20k.csv tab_separated_20k.tsv].freeze
+EXCLUDED_FILES = BenchmarkConfig::EXCLUDE_FILES
 
 CSV_FILES = (
   Dir[File.join(root, "csv_files", "actual",    "*.csv")] +
