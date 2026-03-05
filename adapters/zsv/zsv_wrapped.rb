@@ -30,12 +30,12 @@ module Adapters
       end
 
       def accepts?(**opts)
-        opts.fetch(:col_sep, ",") == ","
+        opts.fetch(:col_sep, ",").length == 1  # ZSV supports single-char delimiters only
       end
 
-      def call(filepath, **_)
+      def call(filepath, col_sep: ",", quote_char: '"', liberal_parsing: false, **_)
         GC.disable
-        raw = ::ZSV.read(filepath)
+        raw = ::ZSV.read(filepath, col_sep: col_sep, quote_char: quote_char, liberal_parsing: liberal_parsing)
         GC.enable
 
         return [] if raw.empty?

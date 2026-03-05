@@ -3,6 +3,9 @@
 #
 # benchmarks/run_all.rb — Run all available adapters against all csv_files/
 #
+# The SmarterCSV version used is the highest in BenchmarkConfig::SMARTER_CSV_VERSIONS.
+# Gemfile.lock is irrelevant — the version is taken from config/benchmark.rb.
+#
 # Saves raw timing results to results/YYYY-MM-DD_rubyX.Y.Z.json.
 # To format results into Markdown tables, run:
 #   ruby benchmarks/format_results.rb
@@ -14,16 +17,138 @@
 require "benchmark"
 require "fileutils"
 require "json"
+require "tmpdir"
 require "csv"
 
 root = File.expand_path("..", __dir__)
 $LOAD_PATH.unshift(root)
 
-# ZSV: optional — load from local build if present
 zsv_lib = File.join(Dir.home, "GitHub", "zsv-ruby", "lib")
 $LOAD_PATH.unshift(zsv_lib) if Dir.exist?(zsv_lib) && !$LOAD_PATH.include?(zsv_lib)
 
 require_relative "../config/benchmark"
+
+# ── Parameters ────────────────────────────────────────────────────────────────
+
+SMARTER_CSV_VERSIONS = BenchmarkConfig::SMARTER_CSV_VERSIONS
+HIGHEST_VERSION      = SMARTER_CSV_VERSIONS.max_by { |v| Gem::Version.new(v) }
+WARMUP               = BenchmarkConfig::WARMUP
+ITERATIONS           = BenchmarkConfig::ITERATIONS
+FILE_OPTIONS         = BenchmarkConfig::FILE_OPTIONS
+
+# ── CSV file list ─────────────────────────────────────────────────────────────
+
+CSV_FILES = (
+  Dir[File.join(root, "csv_files", "actual",    "*.{csv,tsv}")] +
+  Dir[File.join(root, "csv_files", "synthetic", "*.{csv,tsv}")]
+).sort
+
+if CSV_FILES.empty?
+  warn "No CSV files found in csv_files/actual/ or csv_files/synthetic/."
+  exit 1
+end
+
+# ── Multi-version SmarterCSV benchmarking ─────────────────────────────────────
+#
+# Each version runs in a fresh Ruby subprocess (via system) so that multiple
+# gem versions can be activated without conflict. Results written to a temp
+# JSON file and read back by the parent.
+
+version_timings = {}
+
+unless SMARTER_CSV_VERSIONS.empty?
+  $stderr.puts "Benchmarking SmarterCSV versions: #{SMARTER_CSV_VERSIONS.join(', ')}..."
+
+  zsv_lib_line = Dir.exist?(zsv_lib) ? "$LOAD_PATH.unshift(#{zsv_lib.inspect})" : ""
+
+  SMARTER_CSV_VERSIONS.each do |version|
+    tmp_path = File.join(Dir.tmpdir, "csv_bench_ver_#{version}_#{Process.pid}.json")
+
+    $stderr.print "  SmarterCSV #{version} [0/#{CSV_FILES.size}]"
+    $stderr.flush
+
+    script = <<~RUBY
+      require "benchmark"
+      require "json"
+      #{zsv_lib_line}
+
+      begin
+        gem "smarter_csv", #{version.inspect}
+      rescue Gem::MissingSpecVersionError, Gem::LoadError => e
+        File.write(#{tmp_path.inspect}, JSON.generate({ version: #{version.inspect}, error: e.message, timings: {} }))
+        exit 1
+      end
+
+      require "smarter_csv"
+
+      csv_files   = #{JSON.generate(CSV_FILES)}
+      file_options = #{JSON.generate(FILE_OPTIONS.transform_keys(&:to_s).transform_values { |v| v.transform_keys(&:to_s) })}
+      warmup      = #{WARMUP}
+      iterations  = #{ITERATIONS}
+      timings     = {}
+
+      csv_files.each_with_index do |filepath, i|
+        filename  = File.basename(filepath)
+        file_opts = (file_options[filename] || {}).transform_keys(&:to_sym)
+        $stderr.print "\\r  SmarterCSV #{version} [\#{i + 1}/\#{csv_files.size}]"
+        $stderr.flush
+
+        begin
+          warmup.times { SmarterCSV.process(filepath, file_opts) }
+          c_time = iterations.times.map do
+            GC.start; GC.compact rescue nil
+            Benchmark.realtime { SmarterCSV.process(filepath, file_opts) }
+          end.min
+
+          rb_opts = file_opts.merge(acceleration: false)
+          warmup.times { SmarterCSV.process(filepath, rb_opts) }
+          rb_time = iterations.times.map do
+            GC.start; GC.compact rescue nil
+            Benchmark.realtime { SmarterCSV.process(filepath, rb_opts) }
+          end.min
+
+          timings[filename] = { c: c_time, rb: rb_time }
+        rescue StandardError => e
+          $stderr.puts "\\n    ERROR on \#{filename}: \#{e.message}"
+          timings[filename] = { c: nil, rb: nil }
+        end
+      end
+
+      File.write(#{tmp_path.inspect}, JSON.generate({ version: #{version.inspect}, timings: timings }))
+    RUBY
+
+    script_path = File.join(Dir.tmpdir, "csv_bench_ver_#{version}_#{Process.pid}.rb")
+    File.write(script_path, script)
+    if defined?(Bundler)
+      Bundler.with_unbundled_env { system(RbConfig.ruby, script_path) }
+    else
+      system(RbConfig.ruby, script_path)
+    end
+
+    begin
+      data = JSON.parse(File.read(tmp_path))
+      version_timings[version] = data["timings"] || {}
+      $stderr.puts "\r  SmarterCSV #{version}... done"
+    rescue StandardError => e
+      warn "Failed to read results for #{version}: #{e.message}"
+      version_timings[version] = {}
+    ensure
+      FileUtils.rm_f(tmp_path)
+      FileUtils.rm_f(script_path)
+    end
+  end
+end
+
+# ── Activate the highest SmarterCSV version from config ───────────────────────
+
+if HIGHEST_VERSION
+  begin
+    gem "smarter_csv", HIGHEST_VERSION
+  rescue Gem::MissingSpecVersionError, Gem::LoadError => e
+    abort "ERROR: smarter_csv #{HIGHEST_VERSION} is not installed.\n" \
+          "Install with: gem install smarter_csv -v #{HIGHEST_VERSION}"
+  end
+end
 
 require "adapters/ruby_csv/csv_read"
 require "adapters/ruby_csv/csv_hashes"
@@ -34,10 +159,6 @@ require "adapters/zsv/zsv_raw"
 require "adapters/zsv/zsv_wrapped"
 
 # ── Adapter registry ──────────────────────────────────────────────────────────
-#
-# Keys match BenchmarkConfig::ADAPTERS entries.
-# To add a new adapter: require it above, add an entry here, and add the key
-# to BenchmarkConfig::ADAPTERS in config/benchmark.rb.
 
 ADAPTER_REGISTRY = {
   "ruby_csv/csv_read"     => Adapters::RubyCSV::CsvRead.new,
@@ -50,72 +171,40 @@ ADAPTER_REGISTRY = {
 }.freeze
 
 ALL_ADAPTERS = BenchmarkConfig::ADAPTERS.filter_map { |key| ADAPTER_REGISTRY[key] }.freeze
+ADAPTERS     = ALL_ADAPTERS.select(&:available?)
 
-ADAPTERS = ALL_ADAPTERS.select(&:available?)
-
-unavailable = ALL_ADAPTERS.reject(&:available?)
-unavailable.each { |a| warn "SKIP: #{a.name} (not available)" }
-
-# ── Benchmark parameters ──────────────────────────────────────────────────────
-
-WARMUP         = BenchmarkConfig::WARMUP
-ITERATIONS     = BenchmarkConfig::ITERATIONS
-FILE_OPTIONS   = BenchmarkConfig::FILE_OPTIONS
-
-# ── CSV file list ─────────────────────────────────────────────────────────────
-#
-# Scans csv_files/actual/ and csv_files/synthetic/ for .csv and .tsv files.
-# Adapters that cannot handle a file's separator declare accepts?(**opts) = false
-# and are recorded as N/A for that file rather than being excluded globally.
-
-CSV_FILES = (
-  Dir[File.join(root, "csv_files", "actual",    "*.{csv,tsv}")] +
-  Dir[File.join(root, "csv_files", "synthetic", "*.{csv,tsv}")]
-).sort
-
-if CSV_FILES.empty?
-  warn "No CSV files found in csv_files/actual/ or csv_files/synthetic/."
-  exit 1
-end
+ALL_ADAPTERS.reject(&:available?).each { |a| warn "SKIP: #{a.name} (not available)" }
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def count_rows(filepath)
-  # Fast physical-line count; accurate for files without embedded newlines.
-  # For embedded_newlines_20k.csv this is approximate — acceptable for display.
   n = 0
   File.foreach(filepath) { n += 1 }
   [n - 1, 0].max
 end
 
 def timed_run(adapter, filepath, opts = {})
-  # Warmup — not measured; critical for C extensions (see project plan)
   WARMUP.times { adapter.call(filepath, **opts) }
-
-  # Measured runs — take minimum to reduce GC/scheduler noise
   times = ITERATIONS.times.map do
     GC.start
-    GC.compact rescue nil # Ruby 2.7+
+    GC.compact rescue nil
     Benchmark.realtime { adapter.call(filepath, **opts) }
   end
-
   times.min
 end
 
-# ── Run benchmarks ────────────────────────────────────────────────────────────
+# ── Run adapter benchmarks ────────────────────────────────────────────────────
 
-# results[filename] = { _rows: N, adapter_name => { time:, rows_per_sec: }, ... }
 results = {}
 
-CSV_FILES.each do |filepath|
-  filename = File.basename(filepath)
-  rows     = count_rows(filepath)
+CSV_FILES.each_with_index do |filepath, i|
+  filename  = File.basename(filepath)
+  rows      = count_rows(filepath)
+  file_opts = FILE_OPTIONS.fetch(filename, {})
   results[filename] = { _rows: rows }
 
-  $stderr.print "Benchmarking #{filename} (#{rows} rows)..."
+  $stderr.print "[#{i + 1}/#{CSV_FILES.size}] #{filename} (#{rows} rows)..."
   $stderr.flush
-
-  file_opts = FILE_OPTIONS.fetch(filename, {})
 
   ADAPTERS.each do |adapter|
     unless adapter.accepts?(**file_opts)
@@ -137,21 +226,27 @@ end
 # ── Save JSON ─────────────────────────────────────────────────────────────────
 
 smarter_version = SmarterCSV::VERSION rescue "?"
+csv_version     = CSV::VERSION rescue "?"
+zsv_version     = (defined?(ZSV) ? ZSV::VERSION : "n/a") rescue "n/a"
 
 FileUtils.mkdir_p(File.join(root, "results"))
-timestamp = Time.now.strftime("%Y-%m-%d")
+timestamp = Time.now.strftime("%Y-%m-%d_%H%M")
 ruby_tag  = "ruby#{RUBY_VERSION}"
 
 json_path = File.join(root, "results", "#{timestamp}_#{ruby_tag}.json")
 File.write(json_path, JSON.pretty_generate(
-  ruby:           RUBY_VERSION,
-  platform:       RUBY_PLATFORM,
-  smarter_csv:    smarter_version,
-  warmup:         WARMUP,
-  iterations:     ITERATIONS,
-  timestamp:      Time.now.strftime("%Y-%m-%d %H:%M:%S"),
-  adapter_labels: ADAPTERS.each_with_object({}) { |a, h| h[a.name] = a.label },
-  results:        results
+  ruby:                  RUBY_VERSION,
+  platform:              RUBY_PLATFORM,
+  smarter_csv:           smarter_version,
+  csv:                   csv_version,
+  zsv:                   zsv_version,
+  warmup:                WARMUP,
+  iterations:            ITERATIONS,
+  timestamp:             Time.now.strftime("%Y-%m-%d %H:%M:%S"),
+  adapter_labels:        ADAPTERS.each_with_object({}) { |a, h| h[a.name] = a.label },
+  smarter_csv_versions:  SMARTER_CSV_VERSIONS,
+  version_timings:       version_timings,
+  results:               results
 ))
 puts "JSON saved to: #{json_path}"
 

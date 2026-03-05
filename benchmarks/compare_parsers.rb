@@ -1,16 +1,10 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 #
-# benchmarks/compare_parsers.rb — Fair-group head-to-head comparison
+# benchmarks/compare_parsers.rb — Run all adapters and format comparison tables.
 #
-# Compares only the three adapters that produce equivalent output:
-#   - CSV.table (smarter_csv-equivalent)
-#   - SmarterCSV.process (C accelerated)       ← reference
-#   - ZSV + wrapper (smarter_csv-equivalent)   ← optional
-#
-# "Fair" means all three return Array<Hash> with Symbol keys, numeric
-# conversion, whitespace stripping, and empty-value removal — so timing
-# differences reflect parser performance, not output differences.
+# Saves timing results to results/YYYY-MM-DD_compare_rubyX.Y.Z.json,
+# then invokes format_results.rb to produce Markdown tables.
 #
 # Usage:
 #   ruby benchmarks/compare_parsers.rb
@@ -18,6 +12,7 @@
 
 require "benchmark"
 require "fileutils"
+require "json"
 require "csv"
 
 root = File.expand_path("..", __dir__)
@@ -28,22 +23,43 @@ $LOAD_PATH.unshift(zsv_lib) if Dir.exist?(zsv_lib) && !$LOAD_PATH.include?(zsv_l
 
 require_relative "../config/benchmark"
 
+# ── Activate the highest SmarterCSV version from config ───────────────────────
+
+HIGHEST_VERSION = BenchmarkConfig::SMARTER_CSV_VERSIONS.max_by { |v| Gem::Version.new(v) }
+
+if HIGHEST_VERSION
+  begin
+    gem "smarter_csv", HIGHEST_VERSION
+  rescue Gem::MissingSpecVersionError, Gem::LoadError => e
+    abort "ERROR: smarter_csv #{HIGHEST_VERSION} is not installed.\n" \
+          "Install with: gem install smarter_csv -v #{HIGHEST_VERSION}"
+  end
+end
+
+require "adapters/ruby_csv/csv_read"
+require "adapters/ruby_csv/csv_hashes"
 require "adapters/ruby_csv/csv_table"
 require "adapters/smarter_csv/default"
+require "adapters/smarter_csv/ruby_path"
+require "adapters/zsv/zsv_raw"
 require "adapters/zsv/zsv_wrapped"
 
-# ── Fair-comparison adapter set ───────────────────────────────────────────────
+# ── Adapter registry ──────────────────────────────────────────────────────────
 
-FAIR_GROUP = [
-  Adapters::RubyCSV::CsvTable.new,
-  Adapters::SmarterCSVAdapter::Default.new,
-  Adapters::ZSV::ZsvWrapped.new,
-].select(&:available?).freeze
+ADAPTER_REGISTRY = {
+  "ruby_csv/csv_read"     => Adapters::RubyCSV::CsvRead.new,
+  "ruby_csv/csv_hashes"   => Adapters::RubyCSV::CsvHashes.new,
+  "ruby_csv/csv_table"    => Adapters::RubyCSV::CsvTable.new,
+  "smarter_csv/default"   => Adapters::SmarterCSVAdapter::Default.new,
+  "smarter_csv/ruby_path" => Adapters::SmarterCSVAdapter::RubyPath.new,
+  "zsv/zsv_raw"           => Adapters::ZSV::ZsvRaw.new,
+  "zsv/zsv_wrapped"       => Adapters::ZSV::ZsvWrapped.new,
+}.freeze
 
-# Reference = SmarterCSV (C accelerated)
-REFERENCE = FAIR_GROUP.find { |a| a.is_a?(Adapters::SmarterCSVAdapter::Default) }
+ALL_ADAPTERS = BenchmarkConfig::ADAPTERS.filter_map { |key| ADAPTER_REGISTRY[key] }.freeze
+ADAPTERS     = ALL_ADAPTERS.select(&:available?)
 
-abort "SmarterCSV adapter not available — cannot run comparison" unless REFERENCE
+ALL_ADAPTERS.reject(&:available?).each { |a| warn "SKIP: #{a.name} (not available)" }
 
 # ── Parameters ────────────────────────────────────────────────────────────────
 
@@ -79,119 +95,62 @@ def timed_run(adapter, filepath, opts = {})
   times.min
 end
 
-# ── Banner ────────────────────────────────────────────────────────────────────
+# ── Run benchmarks ────────────────────────────────────────────────────────────
 
-puts "=" * 100
-puts "Fair-Group Comparison: #{FAIR_GROUP.map(&:name).join(' | ')}"
-puts "Ruby #{RUBY_VERSION} [#{RUBY_PLATFORM}]  |  SmarterCSV #{SmarterCSV::VERSION}"
-puts "Warmup: #{WARMUP}  |  Best of #{ITERATIONS} measured runs"
-puts "All three adapters return: Array<Hash>, Symbol keys, numeric conversion, whitespace stripped"
-puts "=" * 100
-puts
+results = {}
 
-# ── Run ───────────────────────────────────────────────────────────────────────
+CSV_FILES.each_with_index do |filepath, i|
+  filename  = File.basename(filepath)
+  rows      = count_rows(filepath)
+  file_opts = FILE_OPTIONS.fetch(filename, {})
+  results[filename] = { _rows: rows }
 
-timings = {}
-
-CSV_FILES.each do |filepath|
-  filename = File.basename(filepath)
-  rows     = count_rows(filepath)
-  timings[filename] = { rows: rows, times: {} }
-
-  $stderr.print "  #{filename} (#{rows} rows)..."
+  $stderr.print "[#{i + 1}/#{CSV_FILES.size}] #{filename} (#{rows} rows)..."
   $stderr.flush
 
-  file_opts = FILE_OPTIONS.fetch(filename, {})
-
-  FAIR_GROUP.each do |adapter|
-    if adapter.accepts?(**file_opts)
-      timings[filename][:times][adapter.name] = timed_run(adapter, filepath, file_opts)
+  ADAPTERS.each do |adapter|
+    unless adapter.accepts?(**file_opts)
+      results[filename][adapter.name] = { time: nil, rows_per_sec: nil }
+      next
+    end
+    begin
+      t = timed_run(adapter, filepath, file_opts)
+      results[filename][adapter.name] = { time: t, rows_per_sec: rows / t }
+    rescue StandardError => e
+      warn "\n  ERROR running #{adapter.name} on #{filename}: #{e.message}"
+      results[filename][adapter.name] = { time: nil, rows_per_sec: nil }
     end
   end
 
   $stderr.puts " done"
 end
 
-# ── Results table ─────────────────────────────────────────────────────────────
+# ── Save JSON ─────────────────────────────────────────────────────────────────
 
-ref_name = REFERENCE.name
-name_w   = 36
-time_w   = 10
+smarter_version = SmarterCSV::VERSION rescue "?"
+csv_version     = CSV::VERSION rescue "?"
+zsv_version     = (defined?(ZSV) ? ZSV::VERSION : "n/a") rescue "n/a"
 
-puts
-puts "## Results (seconds, best of #{ITERATIONS})\n\n"
+FileUtils.mkdir_p(File.join(root, "results"))
+timestamp = Time.now.strftime("%Y-%m-%d_%H%M")
+ruby_tag  = "ruby#{RUBY_VERSION}"
 
-header = "| #{"File".ljust(name_w)} | #{"Rows".rjust(7)} |"
-FAIR_GROUP.each { |a| header += " #{a.name.slice(0, time_w).ljust(time_w)} |" }
-header += " Smarter vs CSV.table | Smarter vs ZSV+wrap |" if FAIR_GROUP.size == 3
-puts header
+json_path = File.join(root, "results", "#{timestamp}_compare_#{ruby_tag}.json")
+File.write(json_path, JSON.pretty_generate(
+  ruby:           RUBY_VERSION,
+  platform:       RUBY_PLATFORM,
+  smarter_csv:    smarter_version,
+  csv:            csv_version,
+  zsv:            zsv_version,
+  warmup:         WARMUP,
+  iterations:     ITERATIONS,
+  timestamp:      Time.now.strftime("%Y-%m-%d %H:%M:%S"),
+  adapter_labels: ADAPTERS.each_with_object({}) { |a, h| h[a.name] = a.label },
+  results:        results
+))
+puts "JSON saved to: #{json_path}"
 
-sep = "|#{'-' * (name_w + 2)}|#{'-' * 9}|"
-FAIR_GROUP.each { sep += "#{'-' * (time_w + 2)}|" }
-sep += "#{'-' * 23}|#{'-' * 22}|" if FAIR_GROUP.size == 3
-puts sep
+# ── Format results ────────────────────────────────────────────────────────────
 
-timings.each do |filename, data|
-  rows   = data[:rows]
-  times  = data[:times]
-
-  row = "| #{filename.ljust(name_w)} | #{rows.to_s.rjust(7)} |"
-  FAIR_GROUP.each do |adapter|
-    t = times[adapter.name]
-    row += " #{format('%.4fs', t).rjust(time_w)} |"
-  end
-
-  if FAIR_GROUP.size == 3
-    csv_table_name = FAIR_GROUP.find { |a| a.is_a?(Adapters::RubyCSV::CsvTable) }&.name
-    zsv_name       = FAIR_GROUP.find { |a| a.is_a?(Adapters::ZSV::ZsvWrapped) }&.name
-    ref_t          = times[ref_name]
-
-    if csv_table_name && (csv_t = times[csv_table_name]) && csv_t > 0
-      ratio = csv_t / ref_t
-      smarter_vs_csv = ratio >= 1 ? format("%.2f× faster", ratio) : format("%.2f× slower", 1.0 / ratio)
-    else
-      smarter_vs_csv = "N/A"
-    end
-
-    if zsv_name && (zsv_t = times[zsv_name]) && zsv_t > 0
-      ratio = ref_t / zsv_t
-      smarter_vs_zsv = ratio >= 1 ? format("SmarterCSV %.2f× slower", ratio) : format("SmarterCSV %.2f× faster", 1.0 / ratio)
-    else
-      smarter_vs_zsv = "N/A"
-    end
-
-    row += " #{smarter_vs_csv.ljust(21)} | #{smarter_vs_zsv.ljust(20)} |"
-  end
-
-  puts row
-end
-
-# ── Summary ───────────────────────────────────────────────────────────────────
-
-puts
-puts "## Summary\n"
-puts
-puts "Speedup = CSV.table time / SmarterCSV time  (>1 = SmarterCSV faster)"
-puts
-
-ref_t_total = 0.0
-csv_t_total = 0.0
-
-csv_table_name = FAIR_GROUP.find { |a| a.is_a?(Adapters::RubyCSV::CsvTable) }&.name
-
-timings.each_value do |data|
-  ref_t_total += data[:times][ref_name].to_f
-  csv_t_total += data[:times][csv_table_name].to_f if csv_table_name
-end
-
-if csv_table_name && csv_t_total > 0
-  overall = csv_t_total / ref_t_total
-  puts "Overall: SmarterCSV is #{format('%.2f×', overall)} faster than CSV.table across all files"
-end
-
-puts
-puts "*(Warmup: #{WARMUP} discarded runs. Measured: best of #{ITERATIONS}.)*"
-puts "*(GC.start between each run. GC.compact where supported.)*"
-if FAIR_GROUP.any? { |a| a.is_a?(Adapters::ZSV::ZsvWrapped) }
-  puts "*(ZSV: GC disabled during calls — known zsv-ruby 1.3.1 GC bug on Ruby 3.4.x)*"
-end
+format_script = File.join(root, "benchmarks", "format_results.rb")
+system(RbConfig.ruby, format_script, json_path)

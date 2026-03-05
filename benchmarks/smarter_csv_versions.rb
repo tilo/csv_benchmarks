@@ -13,7 +13,7 @@
 #
 # Usage:
 #   ruby benchmarks/smarter_csv_versions.rb
-#   VERSIONS=1.14.4,1.15.2 ruby benchmarks/smarter_csv_versions.rb
+#   VERSIONS=1.15.2,1.16.0 ruby benchmarks/smarter_csv_versions.rb  # override via env
 
 require "json"
 require "tmpdir"
@@ -26,7 +26,7 @@ require_relative "../config/benchmark"
 
 # ── Version list ──────────────────────────────────────────────────────────────
 
-VERSIONS     = (ENV["VERSIONS"]&.split(",")&.map(&:strip) || BenchmarkConfig::SMARTER_CSV_VERSIONS).freeze
+VERSIONS     = BenchmarkConfig::SMARTER_CSV_VERSIONS
 WARMUP       = BenchmarkConfig::WARMUP
 ITERATIONS   = BenchmarkConfig::ITERATIONS
 FILE_OPTIONS = BenchmarkConfig::FILE_OPTIONS
@@ -193,7 +193,7 @@ puts "*(Warmup: #{WARMUP} discarded. Measured: best of #{ITERATIONS}. Each versi
 # ── Save JSON ─────────────────────────────────────────────────────────────────
 
 FileUtils.mkdir_p(File.join(root, "results"))
-timestamp   = Time.now.strftime("%Y-%m-%d")
+timestamp   = Time.now.strftime("%Y-%m-%d_%H%M")
 result_path = File.join(root, "results", "#{timestamp}_versions.json")
 File.write(result_path, JSON.pretty_generate(all_results))
 puts "\nRaw results saved to: #{result_path}"
