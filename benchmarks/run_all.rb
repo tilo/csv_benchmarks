@@ -53,6 +53,14 @@ end
 # Each version runs in a fresh Ruby subprocess (via system) so that multiple
 # gem versions can be activated without conflict. Results written to a temp
 # JSON file and read back by the parent.
+#
+# If results/smarter_csv_<version>.json already exists, those timings are used
+# instead of re-running. To force a re-run for specific versions:
+#   RECOMPUTE_VERSIONS=1.14.4,1.15.2 rake bench
+#   RECOMPUTE_VERSIONS=all rake bench
+
+recompute_env     = ENV.fetch("RECOMPUTE_VERSIONS", "").split(",").map(&:strip)
+recompute_all     = recompute_env.include?("all")
 
 version_timings = {}
 
@@ -62,6 +70,15 @@ unless SMARTER_CSV_VERSIONS.empty?
   zsv_lib_line = Dir.exist?(zsv_lib) ? "$LOAD_PATH.unshift(#{zsv_lib.inspect})" : ""
 
   SMARTER_CSV_VERSIONS.each do |version|
+    canonical_path = File.join(root, "results", "smarter_csv_#{version}.json")
+
+    if !recompute_all && !recompute_env.include?(version) && File.exist?(canonical_path)
+      cached = JSON.parse(File.read(canonical_path))
+      version_timings[version] = cached.dig("version_timings", version) || {}
+      $stderr.puts "  SmarterCSV #{version}... loaded from #{File.basename(canonical_path)}"
+      next
+    end
+
     tmp_path = File.join(Dir.tmpdir, "csv_bench_ver_#{version}_#{Process.pid}.json")
 
     $stderr.print "  SmarterCSV #{version} [0/#{CSV_FILES.size}]"

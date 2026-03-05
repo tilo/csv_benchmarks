@@ -68,14 +68,21 @@ def fmt_rows_per_sec(rows, t)
   t > 0 ? format("%9.0f", rows / t) : "       N/A"
 end
 
+NOISE_THRESHOLD = 0.03  # differences within ±3% displayed as ~1.0×
+
+
 def speedup_label(ref_time, adapter_time)
   return "ref" if ref_time == adapter_time
 
   ratio = ref_time / adapter_time
+  noise = (ratio - 1.0).abs < NOISE_THRESHOLD
+  suffix = noise ? "³" : ""
+  emphasis = noise ? "*" : ""
+
   if ratio >= 1.0
-    format("%.2f× faster", ratio)
+    format("#{emphasis}%.2f× faster#{suffix}#{emphasis}", ratio)
   else
-    format("%.2f× slower", 1.0 / ratio)
+    format("#{emphasis}%.2f× slower#{suffix}#{emphasis}", 1.0 / ratio)
   end
 end
 
@@ -112,6 +119,7 @@ emit "", output_lines
 emit "- Date: #{timestamp}", output_lines
 emit "- Ruby: #{ruby_version} [#{platform}]", output_lines
 emit "- SmarterCSV: #{smarter_version}", output_lines
+emit "- SmarterCSV versions compared: #{smarter_csv_versions.join(', ')}", output_lines if smarter_csv_versions.size > 1
 emit "- CSV: #{csv_version}", output_lines if csv_version
 emit "- ZSV: #{zsv_version}", output_lines if zsv_version && zsv_version != "n/a" && zsv_version != "false"
 emit "- Warmup: #{warmup} iteration(s), Measured: best of #{iterations}", output_lines
@@ -344,6 +352,10 @@ emit "  Your own post-processing must be added to produce usable data.", output_
 emit "", output_lines
 emit "#{FOOTNOTE_NEAR} **Near-equivalent** to SmarterCSV output (symbol keys, numeric conversion), but not 100%", output_lines
 emit "  identical. Whitespace handling, empty-value removal, and duplicate-header behavior may differ.", output_lines
+emit "", output_lines
+emit "³ **Within Noise Threshold** — difference is within ±#{(NOISE_THRESHOLD * 100).to_i}% and likely measurement noise.", output_lines
+emit "  Benchmarks report the minimum of #{iterations} runs with #{warmup} warm-up iterations; small variations in", output_lines
+emit "  OS scheduling, CPU cache state, or background activity can produce variation at this scale.", output_lines
 emit "", output_lines
 
 # ── Save Markdown ─────────────────────────────────────────────────────────────

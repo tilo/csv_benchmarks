@@ -10,6 +10,7 @@ csv_files/**/*.tsv
 # Results (commit selectively)
 results/*.md
 results/*.json
+results/*.svg
 
 # Ruby
 *.gem

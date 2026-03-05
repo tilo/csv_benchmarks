@@ -1,51 +1,64 @@
 # frozen_string_literal: true
 #
-# config/benchmark.rb — Central configuration for all benchmark scripts.
+# config/benchmark.rb — Single source of truth for all benchmark configuration.
 #
 # Edit this file to tune parameters, select adapters, or change the SmarterCSV
 # versions compared by `rake versions`.
+#
+# Runtime overrides via environment variables:
+#   ADAPTERS=smarter_csv/default,zsv/zsv_wrapped ruby benchmarks/run_all.rb
+#   VERSIONS=1.15.2,1.16.0                       ruby benchmarks/smarter_csv_versions.rb
 
 module BenchmarkConfig
   # ── Timing parameters ───────────────────────────────────────────────────────
 
   WARMUP     = 2   # discarded warm-up runs before measurement
-  ITERATIONS = 8  # number of measured runs; minimum time is reported
+  ITERATIONS = 12  # number of measured runs; minimum time is reported
 
   # ── Per-file options ────────────────────────────────────────────────────────
   #
   # Options passed to each adapter when processing a specific file.
-  # Adapters that cannot handle the options (e.g. ZSV with non-comma separators)
-  # will skip the file and record N/A.
+  # Adapters that cannot handle the options declare accepts?(**opts) = false
+  # and are recorded as N/A for that file.
 
   FILE_OPTIONS = {
     "multi_char_separator_20k.csv" => { col_sep: "::" },
     "tab_separated_20k.tsv"        => { col_sep: "\t" },
   }.freeze
 
-  # ── Adapter list (for rake bench) ───────────────────────────────────────────
+  # ── Adapter list ────────────────────────────────────────────────────────────
   #
-  # Comment out any adapter to skip it.
+  # Default: all adapters. Override at runtime with ADAPTERS=key1,key2.
   # Keys must match ADAPTER_REGISTRY in benchmarks/run_all.rb.
+  # Comment out any line below to permanently disable an adapter.
 
-  ADAPTERS = %w[
-    ruby_csv/csv_read
-    ruby_csv/csv_hashes
-    ruby_csv/csv_table
-    smarter_csv/default
-    smarter_csv/ruby_path
-    zsv/zsv_raw
-    zsv/zsv_wrapped
-  ].freeze
+  ADAPTERS = (
+    ENV["ADAPTERS"]&.split(",")&.map(&:strip) || []
+  ).freeze
 
-  # ── SmarterCSV versions (for rake versions) ─────────────────────────────────
+  # ADAPTERS = (
+  #   ENV["ADAPTERS"]&.split(",")&.map(&:strip) || %w[
+  #     ruby_csv/csv_read
+  #     ruby_csv/csv_hashes
+  #     ruby_csv/csv_table
+  #     smarter_csv/default
+  #     smarter_csv/ruby_path
+  #     zsv/zsv_raw
+  #     zsv/zsv_wrapped
+  #   ]
+  # ).freeze
+
+  # ── SmarterCSV versions ──────────────────────────────────────────────────────
   #
-  # Install each version first:
-  #   gem install smarter_csv -v X.Y.Z
-  # Override at runtime: VERSIONS=1.14.4,1.16.0 rake versions
+  # Used by benchmarks/smarter_csv_versions.rb for side-by-side comparison.
+  # Each version must be installed first: gem install smarter_csv -v X.Y.Z
+  # Override at runtime with VERSIONS=1.15.2,1.16.0.
 
-  SMARTER_CSV_VERSIONS = %w[
-    1.14.4
-    1.15.2
-    1.16.0
-  ].freeze
+  SMARTER_CSV_VERSIONS = (
+    ENV["VERSIONS"]&.split(",")&.map(&:strip) || %w[
+      1.14.4
+      1.15.2
+      1.16.0
+    ]
+  ).freeze
 end

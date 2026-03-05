@@ -35,6 +35,13 @@ bundle exec rspec
 # Run the full benchmark suite
 rake bench
 
+# Format the latest results as Markdown
+rake report
+
+# Generate SVG charts
+rake chart_versions
+rake chart_adapters
+
 # Fair-group comparison (CSV.table vs SmarterCSV vs ZSV+wrapper)
 rake compare
 
@@ -189,13 +196,72 @@ Compare specific installed gem versions side-by-side:
 # Install the versions you want to compare
 gem install smarter_csv -v 1.14.4
 gem install smarter_csv -v 1.15.2
-gem install smarter_csv -v 1.16.0
 
-# Run comparison (each version runs in an isolated subprocess via fork)
+# Run comparison (each version runs in an isolated subprocess)
 rake versions
 
-# Override the version list:
-VERSIONS=1.14.4,1.16.0 ruby benchmarks/smarter_csv_versions.rb
+# Override the version list at runtime:
+VERSIONS=1.14.4,1.15.2 ruby benchmarks/smarter_csv_versions.rb
+```
+
+### Canonical per-version timing files
+
+Once you have good benchmark runs for a released version, condense the best
+timings into a canonical file so they never need to be re-run:
+
+```bash
+# Produces results/smarter_csv_1.14.4.json and results/smarter_csv_1.15.2.json
+ruby tools/merge_results.rb results/2026-03-02_*.json results/2026-03-04_*.json
+```
+
+`merge_results.rb` queries RubyGems.org to confirm which versions are
+released — unreleased/dev versions are silently ignored. For each
+`(version, file, path)` triple it keeps the best (minimum) time across all
+input runs.
+
+On subsequent `rake bench` runs, if `results/smarter_csv_<version>.json`
+exists it is loaded automatically instead of re-running that version.
+To force a re-run:
+
+```bash
+RECOMPUTE_VERSIONS=1.14.4 rake bench        # recompute one version
+RECOMPUTE_VERSIONS=all    rake bench        # recompute all versions
+```
+
+---
+
+## SVG Charts
+
+Two chart types are available, configured in `config/chart.rb`:
+
+```bash
+rake chart_versions results/smarter_csv_1.15.2.json   # version speedup chart
+rake chart_adapters results/2026-03-05_1430_ruby3.4.7.json  # adapter comparison chart
+```
+
+Both produce an SVG file alongside the input JSON (e.g. `*_versions_chart.svg`).
+SVG renders natively on GitHub and in browsers; convert to PNG with
+`rsvg-convert` for publishing elsewhere.
+
+### config/chart.rb
+
+Chart configuration is separate from benchmark configuration:
+
+```ruby
+"versions" => {
+  title:    "SmarterCSV version improvements (C accelerated)",
+  type:     :versions,
+  paths:    [:c],          # :c, :rb, or [:c, :rb] for both
+  versions: %w[1.14.4 1.15.2],
+},
+
+"adapters" => {
+  title:            "Parser comparison vs SmarterCSV",
+  type:             :adapters,
+  baseline_version: "1.15.2",
+  baseline_path:    :c,
+  adapters: [ ... ],
+},
 ```
 
 ---
@@ -256,14 +322,18 @@ bundle exec rspec --format documentation                # verbose
 ## Available Rake Tasks
 
 ```
-rake install       # Unzip CSV benchmark files (alias for unzip_csv)
-rake unzip_csv     # Unzip csv_files.zip → csv_files/
-rake zip_csv       # Zip csv_files/ → csv_files.zip (run before committing new files)
-rake spec          # Run equivalence specs
-rake bench         # Run specs, then full benchmark suite
-rake compare       # Run specs, then fair-group comparison
-rake versions      # Run specs, then multi-version SmarterCSV comparison
-rake profile[f]    # Profile a single CSV file with tools/csv_profile.rb
+rake install            # Unzip CSV benchmark files (alias for unzip_csv)
+rake unzip_csv          # Unzip csv_files.zip → csv_files/
+rake zip_csv            # Zip csv_files/ → csv_files.zip (run before committing new files)
+rake spec               # Run equivalence specs
+rake bench              # Run full benchmark suite → results/YYYY-MM-DD_HHMM_rubyX.Y.Z.json
+rake compare            # Run cross-parser fair-group comparison
+rake versions           # Run multi-version SmarterCSV comparison
+rake report [f.json]    # Format results as Markdown (defaults to results/latest.json)
+rake chart_versions [f] # Generate SVG version-speedup chart
+rake chart_adapters [f] # Generate SVG adapter-comparison chart
+rake merge_results ...  # Condense best timings into per-version canonical files
+rake profile[f]         # Profile a single CSV file with tools/csv_profile.rb
 ```
 
 ---
@@ -284,14 +354,18 @@ csv-benchmarks/
 │   ├── adapters/           # One spec per :equivalent adapter
 │   └── fixtures/           # Small hand-crafted CSV files for specs
 ├── config/
-│   └── benchmark.rb        # Central benchmark configuration
+│   ├── benchmark.rb        # Adapters, versions, warmup/iterations, per-file options
+│   └── chart.rb            # Chart types, versions, adapter lists, colors
 ├── benchmarks/
-│   ├── run_all.rb          # All adapters × all csv_files/
+│   ├── run_all.rb          # All adapters × all csv_files/ → timestamped JSON
 │   ├── compare_parsers.rb  # Fair-group comparison
-│   └── smarter_csv_versions.rb  # Multi-version comparison
+│   ├── smarter_csv_versions.rb  # Multi-version comparison
+│   ├── chart_versions.rb   # SVG chart generator (versions + adapters)
+│   └── format_results.rb   # JSON → Markdown tables
 ├── tools/
 │   ├── csv_profile.rb      # ~30-metric CSV profiler
-│   └── generate_csv.rb     # Synthetic CSV generator
+│   ├── generate_csv.rb     # Synthetic CSV generator
+│   └── merge_results.rb    # Condense best timings → smarter_csv_X.Y.Z.json
 ├── csv_files/              # Gitignored — populated by rake install
 │   ├── actual/             # Real-world files (anonymized)
 │   └── synthetic/          # Stress-test files

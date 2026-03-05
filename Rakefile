@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "rspec/core/rake_task"
+require "shellwords"
 
 RSpec::Core::RakeTask.new(:spec)
 
@@ -9,13 +10,15 @@ task :bench do
   ruby "benchmarks/run_all.rb"
 end
 
-desc "Format benchmark results as Markdown: rake report[path/to/results.json]"
-task :report, [:file] do |_t, args|
-  file_arg = args[:file] ? " #{args[:file]}" : ""
+desc "Format benchmark results as Markdown: rake report [path/to/results.json]"
+task :report do
+  file = ARGV.find { |a| a.end_with?(".json") }
+  ARGV.clear
+  file_arg = file ? " #{file}" : ""
   ruby "benchmarks/format_results.rb#{file_arg}"
 end
-task :results, [:file] => [] do |_t, args|
-  Rake::Task[:report].invoke(args[:file])
+task :results => [] do
+  Rake::Task[:report].invoke
 end
 
 desc "Run cross-parser fair-comparison"
@@ -26,6 +29,30 @@ end
 desc "Run multi-version SmarterCSV comparison"
 task :versions do
   ruby "benchmarks/smarter_csv_versions.rb"
+end
+
+desc "Generate SVG version-speedup chart: rake chart_versions [path/to/results.json]"
+task :chart_versions do
+  file = ARGV.find { |a| a.end_with?(".json") }
+  ARGV.clear
+  file_arg = file ? " #{file}" : ""
+  ruby "benchmarks/chart_versions.rb versions#{file_arg}"
+end
+
+desc "Generate SVG adapter-comparison chart: rake chart_adapters [path/to/results.json]"
+task :chart_adapters do
+  file = ARGV.find { |a| a.end_with?(".json") }
+  ARGV.clear
+  file_arg = file ? " #{file}" : ""
+  ruby "benchmarks/chart_versions.rb adapters#{file_arg}"
+end
+
+desc "Merge version_timings from multiple JSON files: rake merge_results file1.json file2.json [-o out.json]"
+task :merge_results do
+  args = ARGV.drop(1)
+  ARGV.clear
+  abort "Usage: rake merge_results file1.json file2.json [-o output.json]" if args.size < 2
+  ruby "tools/merge_results.rb #{args.map { |a| a.shellescape }.join(' ')}"
 end
 
 desc "Profile a single CSV file: rake profile[csv_files/actual/uscities.csv]"
