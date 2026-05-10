@@ -1,126 +1,116 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 #
-# tools/merge_results.rb — Condense best SmarterCSV version timings from multiple runs.
+# tools/merge_results.rb — Refresh canonical SmarterCSV version cache files.
 #
-# Scans all input JSON files, extracts version_timings for RELEASED versions only
-# (plain X.Y.Z, no pre-release suffixes), and keeps the best (minimum) time for
-# each (version, file, path) combination across all inputs.
-#
-# The output is a standalone reference JSON containing only version_timings.
-# It is compatible with format_results.rb and chart_versions.rb.
+# Auto-discovers all results JSON files, selects only those produced on the
+# latest Ruby version found (by Gem::Version), and for each requested version
+# extracts ONLY measurements where that version wasn't loaded from a canonical
+# cache file (skipping runs whose cached_versions marker lists the version,
+# since those would double-count). Aggregates per (filename, c|rb) using
+# median for 3+ runs, mean for 2, identity for 1, and writes one canonical
+# results/smarter_csv_<version>.json per requested version.
 #
 # Usage:
-#   ruby tools/merge_results.rb file1.json file2.json [...]
-#   ruby tools/merge_results.rb file1.json file2.json [...] -o path/to/output/dir
-#   rake merge_results file1.json file2.json
+#   ruby tools/merge_results.rb 1.15.2 1.16.4
+#
+# Environment overrides:
+#   ANY_RUBY=1    Include data from all Ruby versions found
+#                 (default: only data from the latest Ruby found)
 
 require "json"
 require "rubygems"
-require "net/http"
-require "uri"
-require "time"
+require "set"
+require_relative "merge_helpers"
 
-root = File.expand_path("..", __dir__)
+root     = File.expand_path("..", __dir__)
+scan_dir = File.join(root, "results")
+out_dir  = File.join(root, "results")
+any_ruby = !ENV["ANY_RUBY"].to_s.empty?
 
-# ── Parse args ────────────────────────────────────────────────────────────────
+versions = ARGV.dup
 
-out_idx  = ARGV.index("-o")
-out_path = out_idx ? ARGV.delete_at(out_idx + 1) : nil
-ARGV.delete("-o")
-input_files = ARGV.dup
-
-if input_files.size < 1
-  warn "Usage: ruby tools/merge_results.rb file1.json [file2.json ...] [-o output.json]"
+if versions.empty?
+  warn "Usage: ruby tools/merge_results.rb <version> [<version>...]"
+  warn "Example: ruby tools/merge_results.rb 1.15.2 1.16.4"
   exit 1
 end
 
-missing = input_files.reject { |f| File.exist?(f) }
-if missing.any?
-  warn "ERROR: file(s) not found: #{missing.join(', ')}"
+invalid = versions.reject { |v| v.match?(/\A\d+\.\d+\.\d+(\.\w+)?\z/) }
+if invalid.any?
+  warn "ERROR: invalid version format: #{invalid.join(', ')}"
+  warn "Expected: X.Y.Z or X.Y.Z.preN"
   exit 1
 end
 
-# ── Fetch released versions from RubyGems ────────────────────────────────────
+# ── Discover JSON files ──────────────────────────────────────────────────────
 
-def fetch_released_versions(gem_name)
-  uri  = URI("https://rubygems.org/api/v1/versions/#{gem_name}.json")
-  resp = Net::HTTP.get_response(uri)
-  raise "RubyGems API error: #{resp.code}" unless resp.is_a?(Net::HTTPSuccess)
-  JSON.parse(resp.body)
-    .reject { |v| v["prerelease"] }
-    .map    { |v| v["number"] }
-rescue => e
-  warn "WARNING: could not fetch released versions from RubyGems (#{e.message})."
-  warn "         Falling back to format check (X.Y.Z)."
-  nil
+unless Dir.exist?(scan_dir)
+  warn "ERROR: scan dir not found: #{scan_dir}"
+  exit 1
 end
 
-$stderr.print "Fetching released smarter_csv versions from RubyGems... "
-released_versions = fetch_released_versions("smarter_csv")
-if released_versions
-  $stderr.puts "#{released_versions.size} versions found (latest: #{released_versions.first})"
+# Only raw per-run JSONs — skip canonicals (smarter_csv_*.json), comparison
+# files (*.comparison.json), and the latest.json symlink.
+all_jsons = Dir.glob(File.join(scan_dir, "*.raw.json")).reject { |f| File.symlink?(f) }.sort
+
+if all_jsons.empty?
+  warn "ERROR: no *.raw.json files found in #{scan_dir}"
+  exit 1
+end
+
+# ── Pick latest Ruby version present in the data ─────────────────────────────
+
+file_data = {}
+all_jsons.each do |path|
+  begin
+    file_data[path] = JSON.parse(File.read(path))
+  rescue JSON::ParserError => e
+    warn "WARNING: could not parse #{File.basename(path)}: #{e.message}"
+  end
+end
+
+rubies_seen = file_data.values.map { |d| d["ruby"] }.compact.uniq
+if rubies_seen.empty?
+  warn "ERROR: no Ruby version data found in any JSON"
+  exit 1
+end
+
+latest_ruby = rubies_seen.max_by { |v| Gem::Version.new(v) }
+
+if any_ruby
+  selected = file_data
+  ruby_label = "all Ruby versions (#{rubies_seen.sort_by { |v| Gem::Version.new(v) }.join(', ')})"
 else
-  $stderr.puts "offline fallback active"
+  selected = file_data.select { |_, d| d["ruby"] == latest_ruby }
+  ruby_label = "Ruby #{latest_ruby}"
 end
 
-def released?(version, released_versions)
-  if released_versions
-    released_versions.include?(version)
-  else
-    version.match?(/\A\d+\.\d+\.\d+\z/)
+puts "Merging from: #{ruby_label} (#{selected.size} JSON file(s) in #{scan_dir})"
+
+# ── Per version: gather fresh runs, then median-aggregate ────────────────────
+
+warned = Set.new
+written = 0
+
+versions.each do |version|
+  fresh_meta = []   # [[source_basename, timestamp, timings], ...]
+
+  selected.each do |path, data|
+    timings = MergeHelpers.usable_timings_for(data, version, source_path: path, warned: warned)
+    next unless timings.is_a?(Hash) && !timings.empty?
+    fresh_meta << [File.basename(path), data["timestamp"], data["warmup"], timings]
   end
-end
 
-# ── Load and condense ─────────────────────────────────────────────────────────
-
-best_timings   = {}   # { version => { filename => { "c" => Float, "rb" => Float } } }
-ruby_versions  = []
-primary        = nil
-
-input_files.each do |path|
-  data = JSON.parse(File.read(path))
-  primary = data
-  ruby_versions |= [data["ruby"]]
-
-  (data["version_timings"] || {}).each do |version, file_data|
-    unless released?(version, released_versions)
-      $stderr.puts "  Skipping unreleased version #{version} in #{File.basename(path)}"
-      next
-    end
-
-    best_timings[version] ||= {}
-
-    file_data.each do |filename, timings|
-      best_timings[version][filename] ||= {}
-
-      %w[c rb].each do |path_key|
-        t = timings[path_key]&.to_f
-        next unless t && t > 0
-        existing = best_timings[version][filename][path_key]
-        best_timings[version][filename][path_key] = existing ? [existing, t].min : t
-      end
-    end
+  if fresh_meta.empty?
+    warn "WARNING: no fresh timings for #{version} in #{ruby_label}"
+    next
   end
-end
 
-if ruby_versions.size > 1
-  warn "WARNING: input files span multiple Ruby versions: #{ruby_versions.join(', ')}"
-  warn "         Timings may not be comparable across Ruby versions."
-end
+  collected = MergeHelpers.collect_runs(fresh_meta)
 
-versions_found = best_timings.keys.sort_by { |v| Gem::Version.new(v) }
+  primary = selected.find { |_, d| d.dig("version_timings", version) }&.last || selected.values.first
 
-if versions_found.empty?
-  warn "ERROR: no released version timings found in input files."
-  exit 1
-end
-
-# ── Save one file per released version ───────────────────────────────────────
-
-out_dir = out_path || File.join(root, "results")
-
-versions_found.each do |version|
   output = {
     "ruby"            => primary["ruby"],
     "platform"        => primary["platform"],
@@ -129,15 +119,22 @@ versions_found.each do |version|
     "zsv"             => primary["zsv"],
     "warmup"          => primary["warmup"],
     "iterations"      => primary["iterations"],
-    "condensed_from"  => input_files.map { |f| File.basename(f) },
-    "version_timings" => { version => best_timings[version] },
+    "merged_from"     => fresh_meta.map(&:first),
+    "version_timings" => { version => collected },
     "adapter_labels"  => {},
-    "results"         => {},
+    "results"         => {}
   }
 
   path = File.join(out_dir, "smarter_csv_#{version}.json")
   File.write(path, JSON.pretty_generate(output))
-  puts "  → #{path}"
+  puts "  -> #{path}  (#{fresh_meta.size} fresh run(s) preserved with provenance)"
+  written += 1
 end
 
-puts "Done. #{versions_found.size} file(s) written for: #{versions_found.join(', ')}"
+skipped = rubies_seen - [latest_ruby]
+if !any_ruby && skipped.any?
+  puts ""
+  puts "Note: skipped data from Ruby #{skipped.sort_by { |v| Gem::Version.new(v) }.join(', ')} (set ANY_RUBY=1 to include)"
+end
+
+exit(written > 0 ? 0 : 1)

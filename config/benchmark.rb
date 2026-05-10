@@ -13,7 +13,9 @@ module BenchmarkConfig
   # ── Timing parameters ───────────────────────────────────────────────────────
 
   WARMUP     = 2   # discarded warm-up runs before measurement
-  ITERATIONS = 12  # number of measured runs; minimum time is reported
+  ITERATIONS = 40  # number of measured runs; all samples stored, reported value
+                   # is computed via STATS_METHOD env var (default: :p10).
+                   # Supported: min, p5, p10, median, best_window5.
 
   # ── Per-file options ────────────────────────────────────────────────────────
   #
@@ -32,21 +34,31 @@ module BenchmarkConfig
   # Keys must match ADAPTER_REGISTRY in benchmarks/run_all.rb.
   # Comment out any line below to permanently disable an adapter.
 
-  ADAPTERS = (
-    ENV["ADAPTERS"]&.split(",")&.map(&:strip) || []
-  ).freeze
+   ADAPTERS = (
+     ENV["ADAPTERS"]&.split(",")&.map(&:strip) || %w[
+     ]
+   ).freeze
 
-  # ADAPTERS = (
-  #   ENV["ADAPTERS"]&.split(",")&.map(&:strip) || %w[
-  #     ruby_csv/csv_read
-  #     ruby_csv/csv_hashes
-  #     ruby_csv/csv_table
-  #     smarter_csv/default
-  #     smarter_csv/ruby_path
-  #     zsv/zsv_raw
-  #     zsv/zsv_wrapped
-  #   ]
-  # ).freeze
+   # ADAPTERS = (
+   #   ENV["ADAPTERS"]&.split(",")&.map(&:strip) || %w[
+   #    ruby_csv/csv_read
+   #    ruby_csv/csv_hashes
+   #    smarter_csv/default
+   #    smarter_csv/ruby_path
+   #   ]
+   # ).freeze
+
+ # ADAPTERS = (
+ #    ENV["ADAPTERS"]&.split(",")&.map(&:strip) || %w[
+ #      ruby_csv/csv_read
+ #      ruby_csv/csv_hashes
+ #      ruby_csv/csv_table
+ #      smarter_csv/default
+ #      smarter_csv/ruby_path
+ #      zsv/zsv_raw
+ #      zsv/zsv_wrapped
+ #    ]
+ #  ).freeze
 
   # ── SmarterCSV versions ──────────────────────────────────────────────────────
   #
@@ -57,8 +69,12 @@ module BenchmarkConfig
   SMARTER_CSV_VERSIONS = (
     ENV["VERSIONS"]&.split(",")&.map(&:strip) || %w[
       1.14.4
+      1.15.0
       1.15.2
       1.16.0
+      1.16.4
+      1.17.0.pre8
+      1.17.0.pre9
     ]
   ).freeze
 end

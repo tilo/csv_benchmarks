@@ -10,6 +10,7 @@
 #   (defaults to results/latest.json symlink)
 
 require "json"
+require_relative "../tools/merge_helpers"
 
 root = File.expand_path("..", __dir__)
 
@@ -31,11 +32,32 @@ csv_version           = raw["csv"]
 zsv_version           = raw["zsv"]
 warmup                = raw["warmup"]
 iterations            = raw["iterations"]
+stats_method          = raw["stats_method"] || (ENV["STATS_METHOD"] || "min")  # legacy JSONs default to "min"
 timestamp             = raw["timestamp"] || File.basename(json_path, ".json")
+
+stats_label = case stats_method.to_s
+              when "min"          then "best of #{iterations}"
+              when "p5"           then "p5 of #{iterations}"
+              when "p10"          then "p10 of #{iterations}"
+              when "median", "p50" then "median of #{iterations}"
+              when "best_window5" then "best 5-window mean of #{iterations}"
+              else stats_method.to_s
+              end
 adapter_labels        = raw["adapter_labels"] || {}
-results               = raw["results"]
-smarter_csv_versions  = raw["smarter_csv_versions"] || []
+results               = raw["results"] || {}
+# Versions list: comparison JSONs use "versions"; per-run JSONs use "smarter_csv_versions";
+# canonicals use "smarter_csv" (single version).
+smarter_csv_versions  = raw["versions"] || raw["smarter_csv_versions"] ||
+                        (raw["smarter_csv"] ? [raw["smarter_csv"]] : [])
 version_timings       = raw["version_timings"] || {}
+
+# For headings/labels: prefer the single smarter_csv field; for comparison JSONs
+# (no single version) fall back to the highest version in the list.
+smarter_version ||= smarter_csv_versions.max_by { |v| Gem::Version.new(v) rescue Gem::Version.new("0") } if smarter_csv_versions.any?
+report_kind = if raw["versions"] then "Cross-version comparison"
+              elsif raw["merged_from"] then "Canonical (merged)"
+              else "Single run"
+              end
 
 # Adapter names in column order (insertion order preserved by JSON parser)
 adapter_names = results.values.first&.keys&.reject { |k| k == "_rows" } || []
@@ -116,14 +138,16 @@ has_zsv = adapter_names.any? { |n| n.start_with?("ZSV") }
 
 emit "# CSV Benchmarks", output_lines
 emit "", output_lines
+emit "- Report kind: #{report_kind}", output_lines
 emit "- Date: #{timestamp}", output_lines
 emit "- Ruby: #{ruby_version} [#{platform}]", output_lines
-emit "- SmarterCSV: #{smarter_version}", output_lines
+emit "- SmarterCSV: #{smarter_version}", output_lines if smarter_version
 emit "- SmarterCSV versions compared: #{smarter_csv_versions.join(', ')}", output_lines if smarter_csv_versions.size > 1
 emit "- CSV: #{csv_version}", output_lines if csv_version
 emit "- ZSV: #{zsv_version}", output_lines if zsv_version && zsv_version != "n/a" && zsv_version != "false"
-emit "- Warmup: #{warmup} iteration(s), Measured: best of #{iterations}", output_lines
-emit "- Adapters: #{adapter_names.map { |n| display_labels[n] || n }.join(', ')}", output_lines
+emit "- Warmup: #{warmup} iteration(s), Measured: #{stats_label} (stats_method: #{stats_method})", output_lines
+emit "- Across-runs aggregation: #{raw["across_runs"]}", output_lines if raw["across_runs"]
+emit "- Adapters: #{adapter_names.map { |n| display_labels[n] || n }.join(', ')}", output_lines unless adapter_names.empty?
 emit "", output_lines
 if has_zsv
   emit "> **Note:** ZSV results have GC disabled during calls (zsv-ruby 1.3.1 GC bug", output_lines
@@ -154,7 +178,7 @@ if smarter_csv_versions.size >= 1 && version_timings.any?
       rows = data["_rows"].to_i
       row  = "| #{filename.ljust(name_w)} | #{rows.to_s.rjust(7)} |"
 
-      times = versions_sorted.map { |v| version_timings.dig(v, filename, key.to_s) }
+      times = versions_sorted.map { |v| MergeHelpers.cell_value(version_timings.dig(v, filename), key.to_s) }
       times.each do |t|
         row += " #{(t ? format("%.4fs", t) : "N/A").rjust(ver_col_w)} |"
       end
@@ -176,7 +200,7 @@ end
 # ── Full Results table (seconds) ──────────────────────────────────────────────
 
 unless adapter_names.empty?
-  emit "## Full Results (seconds, best of #{iterations} runs) against SmarterCSV #{smarter_version}\n", output_lines
+  emit "## Full Results (seconds, #{stats_label}) against SmarterCSV #{smarter_version}\n", output_lines
   emit table_header(name_w, col_w, adapter_names, display_labels), output_lines
   emit table_sep(name_w, col_w, adapter_names), output_lines
 
@@ -184,7 +208,7 @@ unless adapter_names.empty?
     rows = data["_rows"].to_i
     row  = "| #{filename.ljust(name_w)} | #{rows.to_s.rjust(7)} |"
     adapter_names.each do |name|
-      t    = data.dig(name, "time")
+      t    = MergeHelpers.cell_value(data[name], "time")
       cell = t ? fmt_time(t) : "N/A"
       row += " #{cell.rjust(col_w)} |"
     end
@@ -203,7 +227,7 @@ unless adapter_names.empty?
     rows = data["_rows"].to_i
     row  = "| #{filename.ljust(name_w)} | #{rows.to_s.rjust(7)} |"
     adapter_names.each do |name|
-      t    = data.dig(name, "time")
+      t    = MergeHelpers.cell_value(data[name], "time")
       cell = t ? fmt_rows_per_sec(rows, t) : "N/A"
       row += " #{cell.rjust(col_w)} |"
     end
@@ -216,26 +240,30 @@ end
 # ── Speedup tables ────────────────────────────────────────────────────────────
 
 [
-  ["## Speedup vs SmarterCSV #{smarter_version} (C accelerated)\n", ref_c_name,  ref_rb_name],
-  ["## Speedup vs SmarterCSV #{smarter_version} (Ruby path)\n",      ref_rb_name, ref_c_name],
-].each do |title, ref_name, excluded_name|
+  ["## Speedup of SmarterCSV #{smarter_version} (C accelerated) vs Ruby CSV #{csv_version}\n", ref_c_name,  ref_rb_name, nil],
+  ["## Speedup of SmarterCSV #{smarter_version} (Ruby path) vs Ruby CSV #{csv_version}\n",     ref_rb_name, ref_c_name,
+   "\n> **Note:** SmarterCSV (Ruby path, `acceleration: false`) does\n" \
+   ">     parse + header normalization + numeric type conversion + hash construction, all in pure Ruby.\n>\n" \
+   "> `CSV.read` (raw arrays, footnote ¹) is an apples-to-oranges comparison.\n" \
+   "> It only parses into arrays — no hash building, no type conversion - all work you'd have to do yourself.\n>\n" \
+   "> The fairer apples-to-apples column is `CSV.hashes` (string-keyed hashes), which performs comparable post-processing.\n\n"],
+].each do |title, ref_name, excluded_name, note|
   next unless adapter_names.include?(ref_name)
 
-  table_adapters = adapter_names.reject { |n| n == excluded_name }
+  table_adapters = adapter_names.reject { |n| n == excluded_name || n == ref_name }
 
   emit title, output_lines
+  emit note, output_lines if note
   emit table_header(name_w, col_w, table_adapters, display_labels), output_lines
   emit table_sep(name_w, col_w, table_adapters), output_lines
 
   results.each do |filename, data|
     rows     = data["_rows"].to_i
-    ref_time = data.dig(ref_name, "time")
+    ref_time = MergeHelpers.cell_value(data[ref_name], "time")
     row      = "| #{filename.ljust(name_w)} | #{rows.to_s.rjust(7)} |"
 
     table_adapters.each do |name|
-      cell = if name == ref_name
-               "ref"
-             elsif ref_time && (t = data.dig(name, "time"))
+      cell = if ref_time && (t = MergeHelpers.cell_value(data[name], "time"))
                speedup_label(ref_time, t)
              else
                "N/A"
@@ -266,13 +294,13 @@ if csv_table_name
 
   results.each do |filename, data|
     rows     = data["_rows"].to_i
-    ref_time = data.dig(csv_table_name, "time")
+    ref_time = MergeHelpers.cell_value(data[csv_table_name], "time")
     row      = "| #{filename.ljust(name_w)} | #{rows.to_s.rjust(7)} |"
 
     fair_adapters.each do |name|
       cell = if name == csv_table_name
                "ref"
-             elsif ref_time && (t = data.dig(name, "time"))
+             elsif ref_time && (t = MergeHelpers.cell_value(data[name], "time"))
                speedup_label(ref_time, t)
              else
                "N/A"
@@ -297,8 +325,8 @@ if adapter_names.include?(ref_c_name) && zsv_wrap_name
 
   results.each do |filename, data|
     rows    = data["_rows"].to_i
-    t_sc    = data.dig(ref_c_name,   "time")
-    t_zsv   = data.dig(zsv_wrap_name, "time")
+    t_sc    = MergeHelpers.cell_value(data[ref_c_name], "time")
+    t_zsv   = MergeHelpers.cell_value(data[zsv_wrap_name], "time")
     row     = "| #{filename.ljust(name_w)} | #{rows.to_s.rjust(7)} |"
 
     if t_sc && t_zsv
@@ -325,8 +353,8 @@ if adapter_names.include?(ref_c_name) && zsv_raw_name
 
   results.each do |filename, data|
     rows  = data["_rows"].to_i
-    t_sc  = data.dig(ref_c_name,  "time")
-    t_zsv = data.dig(zsv_raw_name, "time")
+    t_sc  = MergeHelpers.cell_value(data[ref_c_name], "time")
+    t_zsv = MergeHelpers.cell_value(data[zsv_raw_name], "time")
     row   = "| #{filename.ljust(name_w)} | #{rows.to_s.rjust(7)} |"
 
     if t_sc && t_zsv
@@ -343,20 +371,40 @@ if adapter_names.include?(ref_c_name) && zsv_raw_name
 end
 
 # ── Footnotes ─────────────────────────────────────────────────────────────────
+#
+# Only emit footnotes that are actually referenced in the emitted tables.
+# Version-only runs (empty ADAPTERS) have no ¹/² columns; adapter runs with only
+# SmarterCSV variants have no ¹/² either. Noise ³ is per-cell — scan for its glyph.
 
-emit "---", output_lines
-emit "", output_lines
-emit "#{FOOTNOTE_RAW} **Raw output** — no post-processing applied. Returns plain arrays or string-keyed hashes.", output_lines
-emit "  No header normalization, type conversion, whitespace stripping, or empty-value removal.", output_lines
-emit "  Your own post-processing must be added to produce usable data.", output_lines
-emit "", output_lines
-emit "#{FOOTNOTE_NEAR} **Near-equivalent** to SmarterCSV output (symbol keys, numeric conversion), but not 100%", output_lines
-emit "  identical. Whitespace handling, empty-value removal, and duplicate-header behavior may differ.", output_lines
-emit "", output_lines
-emit "³ **Within Noise Threshold** — difference is within ±#{(NOISE_THRESHOLD * 100).to_i}% and likely measurement noise.", output_lines
-emit "  Benchmarks report the minimum of #{iterations} runs with #{warmup} warm-up iterations; small variations in", output_lines
-emit "  OS scheduling, CPU cache state, or background activity can produce variation at this scale.", output_lines
-emit "", output_lines
+body = output_lines.join("\n")
+used_raw   = display_labels.values.any? { |l| l.include?(FOOTNOTE_RAW) }
+used_near  = display_labels.values.any? { |l| l.include?(FOOTNOTE_NEAR) }
+used_noise = body.include?("³")
+
+if used_raw || used_near || used_noise
+  emit "---", output_lines
+  emit "", output_lines
+
+  if used_raw
+    emit "#{FOOTNOTE_RAW} **Raw output** — no post-processing applied. Returns plain arrays or string-keyed hashes.", output_lines
+    emit "  No header normalization, type conversion, whitespace stripping, or empty-value removal.", output_lines
+    emit "  Your own post-processing must be added to produce usable data.", output_lines
+    emit "", output_lines
+  end
+
+  if used_near
+    emit "#{FOOTNOTE_NEAR} **Near-equivalent** to SmarterCSV output (symbol keys, numeric conversion), but not 100%", output_lines
+    emit "  identical. Whitespace handling, empty-value removal, and duplicate-header behavior may differ.", output_lines
+    emit "", output_lines
+  end
+
+  if used_noise
+    emit "³ **Within Noise Threshold** — difference is within ±#{(NOISE_THRESHOLD * 100).to_i}% and likely measurement noise.", output_lines
+    emit "  Benchmarks report #{stats_label} with #{warmup} warm-up iteration(s); small variations in", output_lines
+    emit "  OS scheduling, CPU cache state, or background activity can produce variation at this scale.", output_lines
+    emit "", output_lines
+  end
+end
 
 # ── Save Markdown ─────────────────────────────────────────────────────────────
 

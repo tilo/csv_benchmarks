@@ -29,18 +29,29 @@ module ChartConfig
 
   CHARTS = {
     "versions" => {
-      title:    "SmarterCSV version improvements (C accelerated)",
+      title:    "SmarterCSV improvements",
       type:     :versions,
-      paths:    [:c],        # :c, :rb, or both [:c, :rb]
+      paths:    [:rb],        # :c, :rb, or both [:c, :rb]
       versions: %w[
         1.14.4
         1.15.2
-        1.16.0
+        1.16.4
+        1.17.0
+      ],
+    },
+
+    "csv_read_vs_smcsv" => {
+      title:            "Ruby CSV.read",
+      type:             :adapters,
+      baseline_version: "1.17.0",
+      baseline_path:    :c,
+      adapters: [
+        "CSV.read (raw arrays)",
       ],
     },
 
     "adapters" => {
-      title:            "Parser comparison vs SmarterCSV",
+      title:            "Parser comparison",
       type:             :adapters,
       # Baseline: SmarterCSV C-accelerated for this version
       baseline_version: "1.16.0",

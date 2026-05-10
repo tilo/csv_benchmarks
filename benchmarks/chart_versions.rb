@@ -14,6 +14,7 @@
 
 require "json"
 require "rubygems"  # Gem::Version
+require_relative "../tools/merge_helpers"
 
 root = File.expand_path("..", __dir__)
 require File.join(root, "config", "chart")
@@ -41,6 +42,20 @@ iterations      = raw["iterations"]
 version_timings = raw["version_timings"] || {}
 results         = raw["results"] || {}
 
+# ── Supplement missing versions from canonical per-version files ──────────────
+
+results_dir = File.join(root, "results")
+(ChartConfig::CHARTS.dig(chart_name, :versions) || []).each do |ver|
+  next if version_timings.key?(ver)
+  canonical = File.join(results_dir, "smarter_csv_#{ver}.json")
+  next unless File.exist?(canonical)
+  data = JSON.parse(File.read(canonical))
+  if (vt = data.dig("version_timings", ver))
+    version_timings[ver] = vt
+    $stderr.puts "  Loaded #{ver} from #{File.basename(canonical)}"
+  end
+end
+
 # ── Build series ──────────────────────────────────────────────────────────────
 #
 # Each series is { name:, color:, shape: :circle|:square, rows: [{file:, ratio:}] }
@@ -62,8 +77,13 @@ when :versions
 
   missing = versions_sorted.reject { |v| version_timings.key?(v) }
   if missing.any?
-    warn "ERROR: versions #{missing.join(', ')} not found in #{json_path}."
-    warn "Available: #{version_timings.keys.join(', ')}"
+    warn "WARNING: versions #{missing.join(', ')} not found — skipping."
+    warn "  Run: ruby tools/merge_results.rb <runs...> to create canonical files."
+    versions_sorted = versions_sorted - missing
+  end
+
+  if versions_sorted.size < 2
+    warn "ERROR: need at least 2 versions with data to chart."
     exit 1
   end
 
@@ -85,8 +105,8 @@ when :versions
         ver_data = version_timings.dig(ver, filename)
         next unless ver_data
 
-        base_t = base_data[path_str]&.to_f
-        ver_t  = ver_data[path_str]&.to_f
+        base_t = MergeHelpers.cell_value(base_data, path_str)
+        ver_t  = MergeHelpers.cell_value(ver_data,  path_str)
         next unless base_t && ver_t && ver_t > 0
 
         label = File.basename(filename, ".*")
@@ -103,7 +123,12 @@ when :versions
     end
   end
 
-  title_detail = "v#{versions_sorted.last} vs v#{baseline}"
+  path_label = case show_paths
+               when [:c]       then "C accelerated"
+               when [:rb]      then "Ruby (not accelerated)"
+               else                 "C accelerated + Ruby path"
+               end
+  title_detail = "vs #{baseline} — #{path_label}"
 
 when :adapters
   baseline_version = chart_cfg[:baseline_version]
@@ -123,8 +148,8 @@ when :adapters
       base_data = version_timings.dig(baseline_version, filename)
       next unless base_data
 
-      base_t    = base_data[baseline_path]&.to_f
-      adapter_t = file_data.dig(adapter_name, "time")&.to_f
+      base_t    = MergeHelpers.cell_value(base_data, baseline_path)
+      adapter_t = MergeHelpers.cell_value(file_data[adapter_name], "time")
       next unless base_t && adapter_t && adapter_t > 0
 
       label = File.basename(filename, ".*")
@@ -146,12 +171,13 @@ when :adapters
   title_detail = "vs SmarterCSV #{baseline_version} (#{baseline_path == 'c' ? 'C accelerated' : 'Ruby path'})"
 end
 
-# ── Merge into row list sorted by primary series ──────────────────────────────
+# ── Merge into row list sorted by highest-performance series ──────────────────
 
-primary = series_list.first&.dig(:rows) || []
-sorted_files = primary.sort_by { |r| -r[:ratio] }.map { |r| r[:file] }
-# Append any filenames only in secondary series
-sorted_files += (all_filenames - sorted_files)
+# Build a max-ratio lookup per file across all series, then sort descending.
+max_ratio_by_file = all_filenames.each_with_object({}) do |label, h|
+  h[label] = series_list.filter_map { |s| s[:rows].find { |r| r[:file] == label }&.dig(:ratio) }.max || 0
+end
+sorted_files = all_filenames.sort_by { |label| -max_ratio_by_file[label] }
 
 rows = sorted_files.map do |label|
   points = series_list.map do |s|
@@ -184,7 +210,7 @@ CHART_W   = 580
 PAD_R     = 20
 TOTAL_W   = NAME_W + CHART_W + PAD_R
 ROW_H     = 26
-HEADER_H  = 60
+HEADER_H  = 86
 LEGEND_H  = 20 * series_list.size + 28
 TOTAL_H   = HEADER_H + rows.size * ROW_H + LEGEND_H
 FONT      = "ui-monospace, 'Cascadia Code', 'Courier New', monospace"
@@ -213,6 +239,8 @@ def marker_svg(shape, cx, cy, color)
   end
 end
 
+displayed_versions = versions_sorted ? versions_sorted[1..].join(', ') : nil
+
 # ── SVG ───────────────────────────────────────────────────────────────────────
 
 svg = []
@@ -223,17 +251,21 @@ SVG
 
 svg << %(<rect width="#{TOTAL_W}" height="#{TOTAL_H}" fill="#ffffff"/>)
 
-title_text = "#{chart_cfg[:title]}  —  #{title_detail}  —  Ruby #{ruby_version}  [log scale, best of #{iterations}]"
-svg << %(<text x="#{TOTAL_W / 2}" y="20" text-anchor="middle" font-size="13" ) +
-       %(font-weight="bold" fill="#212121">#{xml_escape(title_text)}</text>)
+# Line 1: chart title + detail
+svg << %(<text x="#{TOTAL_W / 2}" y="18" text-anchor="middle" font-size="13" ) +
+       %(font-weight="bold" fill="#212121">#{xml_escape([chart_cfg[:title], displayed_versions, title_detail].compact.join(" "))}</text>)
 
-# Sub-title: baseline explanation
+# Line 2: baseline explanation
 baseline_note = case chart_cfg[:type]
                 when :versions then "Speedup ratio = baseline version time ÷ newer version time  (higher = newer version is faster)"
                 when :adapters then "Speedup ratio = SmarterCSV #{chart_cfg[:baseline_version]} time ÷ adapter time  (higher = adapter is faster)"
                 end
-svg << %(<text x="#{TOTAL_W / 2}" y="36" text-anchor="middle" font-size="10" fill="#9e9e9e">) +
+svg << %(<text x="#{TOTAL_W / 2}" y="32" text-anchor="middle" font-size="10" fill="#9e9e9e">) +
        %(#{xml_escape(baseline_note)}</text>)
+
+# Line 3: Ruby version + measurement info
+svg << %(<text x="#{TOTAL_W / 2}" y="48" text-anchor="middle" font-size="11" fill="#616161">) +
+       %(#{xml_escape("Ruby #{ruby_version}  [log scale, best of #{iterations}]")}</text>)
 
 # Tick lines + labels
 ticks.each do |t|
@@ -290,11 +322,13 @@ rows.each_with_index do |row, i|
     end
   end
 
-  marker_positions.each do |m|
+  marker_positions.each_with_index do |m, mi|
     svg << marker_svg(m[:shape], m[:x], cy, m[:color])
-    lbl = fmt_ratio(m[:ratio])
-    lx  = m[:x] + 8
-    lx  = m[:x] - 8 - lbl.length * 7 if lx + lbl.length * 7 > NAME_W + CHART_W
+    lbl        = fmt_ratio(m[:ratio])
+    label_w    = lbl.length * 7
+    left_side  = mi == 0 && marker_positions.size > 1
+    lx = left_side ? m[:x] - 8 - label_w : m[:x] + 8
+    lx = m[:x] - 8 - label_w if !left_side && lx + label_w > NAME_W + CHART_W
     svg << %(<text x="#{lx}" y="#{cy + m[:label_dy]}" font-size="10" fill="#{m[:color]}">#{lbl}</text>)
   end
 end
