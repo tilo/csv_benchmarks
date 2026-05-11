@@ -1,9 +1,58 @@
 #!/usr/bin/env ruby
+# frozen_string_literal: true
+#
+# bin/run_bench — run `rake bench` N times, then optionally compute the
+# apples-to-apples comparison and render a report.
+#
+# Usage:
+#   bin/run_bench <N>                                          # bench × N only
+#   bin/run_bench <N> <stats_method> <version1> [<version2>...] # bench + compare + report
+#
+# Examples:
+#   bin/run_bench 3
+#   bin/run_bench 3 p10 1.14.4 1.15.0 1.15.2 1.16.0 1.16.4 1.17.0.pre8 1.17.0.pre9
 
-N  = ARGV[0].to_i
+require "shellwords"
 
-N.times do |i|
-  puts "\n---- Iteration #{i+1}/#{N} --------------------\n\n"
-  `rake bench`
-  `rake results`
-end;
+if ARGV.empty?
+  warn "Usage: bin/run_bench <N> [<stats_method> <version1> [<version2>...]]"
+  warn "Example: bin/run_bench 3 p10 1.16.4 1.17.0.pre8 1.17.0.pre9"
+  exit 1
+end
+
+n = Integer(ARGV[0]) rescue nil
+unless n && n > 0
+  warn "ERROR: N must be a positive integer (got #{ARGV[0].inspect})"
+  exit 1
+end
+
+stats_method = ARGV[1]
+versions     = ARGV[2..] || []
+
+n.times do |i|
+  puts "\n#{'=' * 60}"
+  puts "BENCH #{i + 1}/#{n}"
+  puts "#{'=' * 60}\n\n"
+  ok = system("rake bench")
+  unless ok
+    warn "\nrake bench failed or was interrupted; stopping after #{i} successful run(s)"
+    exit 1
+  end
+end
+
+# If stats_method + versions provided, also run compare + report.
+exit 0 if stats_method.nil? || versions.empty?
+
+puts "\n#{'=' * 60}"
+puts "COMPARE: #{stats_method} #{versions.join(' ')}"
+puts "#{'=' * 60}\n\n"
+ok = system("rake compare_versions #{[stats_method, *versions].map(&:shellescape).join(' ')}")
+exit 1 unless ok
+
+latest = Dir.glob("results/*.comparison.json").max_by { |f| File.mtime(f) }
+exit 0 unless latest
+
+puts "\n#{'=' * 60}"
+puts "REPORT: #{File.basename(latest)}"
+puts "#{'=' * 60}\n\n"
+system("rake report #{latest.shellescape}")

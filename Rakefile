@@ -10,12 +10,11 @@ task :bench do
   ruby "benchmarks/run_all.rb"
 end
 
-desc "Format benchmark results as Markdown: rake report [path/to/results.json]"
+desc "Format benchmark results as Markdown: rake report [path/to/results.json] [version1 version2 ...] (NO_MD=1 to skip writing .md)"
 task :report do
-  file = ARGV.find { |a| a.end_with?(".json") }
-  ARGV.clear
-  file_arg = file ? " #{file}" : ""
-  ruby "benchmarks/format_results.rb#{file_arg}"
+  args = ARGV.drop(1)
+  args.each { |a| task(a.to_sym) {} }   # define no-op tasks so rake doesn't try to build them
+  ruby "benchmarks/format_results.rb #{args.map(&:shellescape).join(' ')}"
 end
 task :results => [] do
   Rake::Task[:report].invoke

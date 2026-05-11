@@ -219,11 +219,43 @@ version_timings  = {}
 cached_versions  = []   # versions whose timings were loaded from canonical cache (not freshly measured)
 
 unless SMARTER_CSV_VERSIONS.empty?
-  $stderr.puts "Benchmarking SmarterCSV versions: #{SMARTER_CSV_VERSIONS.join(', ')}..."
+  # ── Version ordering — reduce ordering bias ────────────────────────────────
+  # Across multiple `rake bench` runs, randomized order ensures each version
+  # gets, on average, similar conditions (cache state, thermal level, OS
+  # scheduler luck). Without shuffling, versions later in the fixed order
+  # systematically run on a hotter/more-loaded machine.
+  #
+  # BENCH_ORDER=random   (default) — fresh random shuffle
+  # BENCH_ORDER=fixed              — config order (also: BENCH_SHUFFLE=0)
+  # BENCH_ORDER=reverse            — reversed config order
+  # BENCH_SEED=NNN                 — reproducible random shuffle (use with BENCH_ORDER=random)
+  order_mode = ENV["BENCH_ORDER"] || (ENV["BENCH_SHUFFLE"] == "0" ? "fixed" : "random")
+  iteration_order = SMARTER_CSV_VERSIONS.to_a
+  bench_seed = nil
+
+  case order_mode
+  when "random"
+    if iteration_order.size > 1
+      bench_seed = (ENV["BENCH_SEED"] || Random.new_seed).to_i
+      iteration_order.shuffle!(random: Random.new(bench_seed))
+      $stderr.puts "Version order: random (seed: #{bench_seed}; BENCH_SEED=N to reproduce)"
+    else
+      $stderr.puts "Version order: single version, no shuffling needed"
+    end
+  when "fixed"
+    $stderr.puts "Version order: fixed (config order)"
+  when "reverse"
+    iteration_order.reverse!
+    $stderr.puts "Version order: reversed config order"
+  else
+    warn "WARNING: unknown BENCH_ORDER=#{order_mode.inspect}; falling back to config order"
+  end
+  $stderr.puts "  #{iteration_order.join(' → ')}"
+  version_run_order = iteration_order.dup
 
   zsv_lib_line = Dir.exist?(zsv_lib) ? "$LOAD_PATH.unshift(#{zsv_lib.inspect})" : ""
 
-  SMARTER_CSV_VERSIONS.each do |version|
+  iteration_order.each do |version|
     break if $shutdown_requested
     canonical_path = File.join(root, "results", "smarter_csv_#{version}.json")
 
@@ -493,6 +525,8 @@ ensure
         total_elapsed_seconds:  (Time.now - total_start).round(1),
         adapter_labels:         (ADAPTERS rescue []).each_with_object({}) { |a, h| h[a.name] = a.label },
         smarter_csv_versions:   SMARTER_CSV_VERSIONS,
+        bench_seed:             (bench_seed rescue nil),
+        version_run_order:      (version_run_order rescue []),
         cached_versions:        (cached_versions rescue []),
         version_timings:        (version_timings rescue {}),
         results:                (results rescue {})

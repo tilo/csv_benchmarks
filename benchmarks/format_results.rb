@@ -14,9 +14,15 @@ require_relative "../tools/merge_helpers"
 
 root = File.expand_path("..", __dir__)
 
-# ── Find JSON file ─────────────────────────────────────────────────────────────
+# ── Parse args ─────────────────────────────────────────────────────────────────
+# Args can be: an optional .json path, plus zero or more version strings to
+# filter the version-comparison tables. Order doesn't matter.
 
-json_path = ARGV[0] || File.join(root, "results", "latest.json")
+VERSION_RE = /\A\d+\.\d+\.\d+(\.\w+)?\z/.freeze
+json_arg        = ARGV.find { |a| a.end_with?(".json") }
+versions_filter = ARGV.select { |a| a.match?(VERSION_RE) }
+
+json_path = json_arg || File.join(root, "results", "latest.json")
 
 unless json_path && File.exist?(json_path.to_s)
   warn "No results JSON found. Run 'rake bench' first, or pass a path as argument."
@@ -50,6 +56,20 @@ results               = raw["results"] || {}
 smarter_csv_versions  = raw["versions"] || raw["smarter_csv_versions"] ||
                         (raw["smarter_csv"] ? [raw["smarter_csv"]] : [])
 version_timings       = raw["version_timings"] || {}
+
+# Apply version filter if any were passed on the command line.
+unless versions_filter.empty?
+  available = smarter_csv_versions
+  missing   = versions_filter - available
+  unless missing.empty?
+    warn "WARNING: requested version(s) not in this report: #{missing.join(', ')} (available: #{available.join(', ')})"
+  end
+  smarter_csv_versions = versions_filter & available   # preserve filter order, drop missing
+  if smarter_csv_versions.empty?
+    warn "ERROR: no requested versions are present in #{File.basename(json_path)}"
+    exit 1
+  end
+end
 
 # For headings/labels: prefer the single smarter_csv field; for comparison JSONs
 # (no single version) fall back to the highest version in the list.
@@ -408,6 +428,12 @@ end
 
 # ── Save Markdown ─────────────────────────────────────────────────────────────
 
-md_path = File.realpath(json_path).sub(/\.json$/, ".md")
-File.write(md_path, output_lines.join("\n") + "\n")
-puts "Markdown saved to: #{md_path}"
+# NO_MD=1 suppresses the .md file write — useful for ad-hoc comparisons that
+# shouldn't overwrite a canonical report. Output still goes to stdout.
+if ENV["NO_MD"]
+  $stderr.puts "(NO_MD set — markdown file not written)"
+else
+  md_path = File.realpath(json_path).sub(/\.json$/, ".md")
+  File.write(md_path, output_lines.join("\n") + "\n")
+  $stderr.puts "Markdown saved to: #{md_path}"
+end
