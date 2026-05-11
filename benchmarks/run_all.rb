@@ -230,7 +230,7 @@ unless SMARTER_CSV_VERSIONS.empty?
   # BENCH_ORDER=reverse            — reversed config order
   # BENCH_SEED=NNN                 — reproducible random shuffle (use with BENCH_ORDER=random)
   order_mode = ENV["BENCH_ORDER"] || (ENV["BENCH_SHUFFLE"] == "0" ? "fixed" : "random")
-  iteration_order = SMARTER_CSV_VERSIONS.to_a
+  iteration_order = SMARTER_CSV_VERSIONS.dup
   bench_seed = nil
 
   case order_mode
