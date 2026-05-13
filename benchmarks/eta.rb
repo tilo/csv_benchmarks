@@ -38,30 +38,31 @@ class EtaEstimator
     parsed.compact!
     return nil if parsed.empty?
 
-    # For each version, find the most recent run that has fresh data for it.
-    per_version = {}
-    versions_to_run.each do |version|
-      raw_files.each do |path|
-        data = parsed[path]
-        next unless data
-        cached = data["cached_versions"] || []
+    # Index ALL freshly-measured versions across all raw files (most recent
+     # wins), not just the ones in versions_to_run — we need the wider set so
+     # that fallback selection for a missing version can pick a semver-adjacent
+     # neighbor even if that neighbor isn't being run this session.
+    all_available = {}
+    raw_files.each do |path|
+      data = parsed[path] or next
+      cached = data["cached_versions"] || []
+      (data["version_timings"] || {}).each do |version, timings|
         next if cached.include?(version)
-        timings = data.dig("version_timings", version)
         next unless timings.is_a?(Hash) && !timings.empty?
-        per_version[version] = { path: path, data: data, timings: timings }
-        break
+        all_available[version] ||= { path: path, data: data, timings: timings }
       end
     end
 
+    per_version = all_available.slice(*versions_to_run)
     missing = versions_to_run - per_version.keys
 
     # For each missing version, fall back to the CLOSEST available version
     # (preferring the highest one ≤ missing; otherwise the lowest one above).
-    # Track which fallback was used per missing version.
+    # Search across ALL available versions, not just versions_to_run.
     fallback_used = {}   # missing_version => fallback_version_string
-    if per_version.any?
+    if all_available.any?
       missing.each do |version|
-        fb = closest_version(version, per_version.keys)
+        fb = closest_version(version, all_available.keys)
         fallback_used[version] = fb if fb
       end
     end
@@ -70,7 +71,7 @@ class EtaEstimator
     version_seconds_total = 0.0
     versions_to_run.each do |version|
       timings = per_version[version]&.dig(:timings) ||
-                (fb = fallback_used[version]) && per_version[fb][:timings]
+                (fb = fallback_used[version]) && all_available[fb][:timings]
       next unless timings
       version_seconds_total += sum_cell_times(timings, in_process_per_file.keys) * @factor
     end
