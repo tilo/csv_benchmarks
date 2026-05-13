@@ -324,25 +324,44 @@ rows.each_with_index do |row, i|
     end
   end
 
+  leftmost_marker  = marker_positions.first
+  rightmost_marker = marker_positions.last
+
   clusters.each do |cluster|
     # Draw markers
     cluster.each { |m| svg << marker_svg(m[:shape], m[:x], cy, m[:color]) }
 
+    cluster_has_leftmost = cluster.first.equal?(leftmost_marker)
+
     if cluster.size == 1
-      # Singleton — use side rule:
-      #   rightmost marker in the row → label to the RIGHT
-      #   everything else → label to the LEFT
+      # Singleton:
+      #   leftmost marker in the row → label to the LEFT (always — there's always space)
+      #   rightmost marker in the row (and not leftmost) → label to the RIGHT
+      #   middle marker → label to the LEFT
       m = cluster.first
-      is_rightmost_in_row = m.equal?(marker_positions.last)
+      is_rightmost_in_row = m.equal?(rightmost_marker)
       lbl     = fmt_ratio(m[:ratio])
       label_w = lbl.length * 7
-      lx = is_rightmost_in_row ? m[:x] + 8 : m[:x] - 8 - label_w
+      lx = (is_rightmost_in_row && !cluster_has_leftmost) ? m[:x] + 8 : m[:x] - 8 - label_w
       svg << %(<text x="#{lx}" y="#{cy + 4}" font-size="10" fill="#{m[:color]}">#{lbl}</text>)
     else
-      # Clustered overlapping markers — stack labels horizontally to the right
-      # of the rightmost marker, in marker x-order, color-coded.
+      # Multi-marker cluster (overlapping markers).
+      # If this cluster contains the row's leftmost marker, that marker's label
+      # goes to the LEFT of its marker (always reserved that space). The rest
+      # of the cluster's labels stack to the right of the rightmost in cluster.
+      # Otherwise, all cluster labels stack to the right of the rightmost.
+      rest_of_cluster = cluster
+      if cluster_has_leftmost
+        m       = cluster.first
+        lbl     = fmt_ratio(m[:ratio])
+        label_w = lbl.length * 7
+        lx      = m[:x] - 8 - label_w
+        svg << %(<text x="#{lx}" y="#{cy + 4}" font-size="10" fill="#{m[:color]}">#{lbl}</text>)
+        rest_of_cluster = cluster.drop(1)
+      end
+
       lx = cluster.last[:x] + 8
-      cluster.each do |m|
+      rest_of_cluster.each do |m|
         lbl = fmt_ratio(m[:ratio])
         svg << %(<text x="#{lx}" y="#{cy + 4}" font-size="10" fill="#{m[:color]}">#{lbl}</text>)
         lx += lbl.length * 7 + 6   # advance past this label + small gap

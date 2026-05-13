@@ -341,6 +341,31 @@ Both produce an SVG file alongside the input JSON (e.g. `*_versions_chart.svg`).
 SVG renders natively on GitHub and in browsers; convert to PNG with
 `rsvg-convert` for publishing elsewhere.
 
+### Label placement (chart_versions)
+
+Each row shows one or more markers (one per version/series) plotted on a
+log-scale x-axis. Numerical values are placed next to their markers so the
+exact ratio is readable without a tooltip. Labels stay on a single line per
+row (row height is fixed); placement is chosen so labels never overlap.
+
+The rules, applied per row left-to-right:
+
+1. **Markers within ~30 px of each other are treated as a cluster.** Their
+   visual marker glyphs still sit at their respective x-positions (colors
+   distinguish them), but their labels are placed *together* to the right
+   of the rightmost marker in the cluster — laid out horizontally,
+   color-coded so the order is clear (e.g. `●●  14.5×  14.7×`).
+
+2. **The row's leftmost marker always gets its label on the LEFT.** Whether
+   it's a singleton or part of a cluster — there's always space at the left
+   edge between the file-name column and the chart's `1×` line.
+
+3. **The row's rightmost marker (if it's not also the leftmost) gets its
+   label on the RIGHT** of its marker.
+
+4. **All other (middle) singleton markers get their labels on the LEFT** of
+   their marker.
+
 ### config/chart.rb
 
 Chart configuration is separate from benchmark configuration:
