@@ -194,9 +194,17 @@ primary = matching.first[1]
 # Per-version run counts → choose the across-runs aggregation label by max count
 max_runs = version_sources.values.map(&:size).max
 
+# CPU consistency check — mixing machines (M1 vs M3, etc.) makes the comparison
+# meaningless. Inherit cpu from the raw runs; warn if they disagree.
+cpus_seen = matching.map { |_, data| data["cpu"] }.compact.uniq
+if cpus_seen.size > 1
+  warn "WARNING: comparison mixes runs from different CPUs: #{cpus_seen.join(', ')} — numbers are not directly comparable"
+end
+
 output = {
   "ruby"            => primary["ruby"],
   "platform"        => primary["platform"],
+  "cpu"             => cpus_seen.size == 1 ? cpus_seen.first : cpus_seen,  # array if mixed
   "csv"             => primary["csv"],
   "zsv"             => primary["zsv"],
   "stats_method"    => stats_method,

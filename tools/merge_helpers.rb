@@ -25,6 +25,8 @@
 #   Default: :p10  (4th-lowest of 40 — robust to a few timer flukes,
 #   still rewards fast execution).
 
+require "rbconfig"
+
 module MergeHelpers
   module_function
 
@@ -32,6 +34,33 @@ module MergeHelpers
 
   def stats_method
     (ENV["STATS_METHOD"] || DEFAULT_STATS_METHOD).to_sym
+  end
+
+  # Human-readable CPU identifier for the machine the benchmark runs on, so
+  # results from different machines (M1 vs M3, Intel vs ARM) are distinguishable.
+  #   macOS: "Apple M1", "Apple M3 Pro", "Intel(R) Core(TM) i7-..." (sysctl)
+  #   Linux x86:  "model name" line from /proc/cpuinfo
+  #   Linux ARM:  "Model name:" line from `lscpu` (e.g. "Cortex-A72", "Neoverse-N1")
+  #               — /proc/cpuinfo on ARM has no "model name" field
+  #   else / failure: falls back to RUBY_PLATFORM (e.g. "arm64-darwin24")
+  def cpu_info
+    case RbConfig::CONFIG["host_os"]
+    when /darwin/
+      out = `sysctl -n machdep.cpu.brand_string 2>/dev/null`.to_s.strip
+      out.empty? ? RUBY_PLATFORM : out
+    when /linux/
+      # /proc/cpuinfo "model name" works on x86 but is absent on ARM.
+      from_proc = (File.read("/proc/cpuinfo")[/^model name\s*:\s*(.+)$/i, 1] rescue nil)&.strip
+      return from_proc if from_proc && !from_proc.empty?
+      # lscpu "Model name:" works on both x86 and ARM (util-linux; may be missing
+      # in minimal containers — the rescue below covers that).
+      from_lscpu = `lscpu 2>/dev/null`[/^Model name:\s*(.+)$/i, 1]&.strip
+      (from_lscpu && !from_lscpu.empty?) ? from_lscpu : RUBY_PLATFORM
+    else
+      RUBY_PLATFORM
+    end
+  rescue StandardError
+    RUBY_PLATFORM
   end
 
   # Linear-interpolated percentile of an Array of Floats.

@@ -516,6 +516,7 @@ ensure
       File.write(json_path, JSON.pretty_generate(
         ruby:                   RUBY_VERSION,
         platform:               RUBY_PLATFORM,
+        cpu:                    (MergeHelpers.cpu_info rescue RUBY_PLATFORM),
         smarter_csv:            smarter_version,
         csv:                    csv_version,
         zsv:                    zsv_version,

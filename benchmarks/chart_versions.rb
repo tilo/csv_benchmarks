@@ -308,27 +308,33 @@ rows.each_with_index do |row, i|
   # Sort by x for overlap assignment
   marker_positions.sort_by! { |m| m[:x] }
 
-  # Assign label y-offsets to avoid overlap (stack vertically if within 50px)
+  # Assign label y-offsets to avoid overlap (stack vertically if markers are
+  # within 50px on the x-axis). Each stacked label is 12px below the previous —
+  # enough room for 10pt text without overlap.
   label_slots = []
   marker_positions.each do |m|
     slot = label_slots.find { |s| (s[:last_x] - m[:x]).abs < 50 }
     if slot
       slot[:count] += 1
       slot[:last_x] = m[:x]
-      m[:label_dy] = slot[:count] * 11 - 4
+      m[:label_dy] = 4 + slot[:count] * 12
     else
       label_slots << { last_x: m[:x], count: 0 }
       m[:label_dy] = 4
     end
   end
 
+  # Label placement per row (markers sorted left-to-right by x):
+  #   - rightmost marker (or single-marker row): label to the RIGHT of marker
+  #   - everything else (leftmost + middle markers of multi-marker rows): label to the LEFT
+  # This keeps labels from crowding the chart's right edge and avoids overlap
+  # between the rightmost marker's label and the chart border.
   marker_positions.each_with_index do |m, mi|
     svg << marker_svg(m[:shape], m[:x], cy, m[:color])
     lbl        = fmt_ratio(m[:ratio])
     label_w    = lbl.length * 7
-    left_side  = mi == 0 && marker_positions.size > 1
-    lx = left_side ? m[:x] - 8 - label_w : m[:x] + 8
-    lx = m[:x] - 8 - label_w if !left_side && lx + label_w > NAME_W + CHART_W
+    is_right   = mi == marker_positions.size - 1   # rightmost (also true for single-marker rows)
+    lx = is_right ? m[:x] + 8 : m[:x] - 8 - label_w
     svg << %(<text x="#{lx}" y="#{cy + m[:label_dy]}" font-size="10" fill="#{m[:color]}">#{lbl}</text>)
   end
 end
