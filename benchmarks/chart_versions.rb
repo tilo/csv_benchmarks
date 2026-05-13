@@ -308,25 +308,46 @@ rows.each_with_index do |row, i|
   # Sort by x for overlap assignment
   marker_positions.sort_by! { |m| m[:x] }
 
-  # One line of labels per row — no vertical stacking. Row height is fixed and
-  # vertical-stacked labels get clipped. Rely on the side-choice rule
-  # (rightmost label → right, others → left) plus marker x-spacing to keep
-  # labels readable. If labels still collide on rows with very close ratios,
-  # consider widening the chart or shortening label text.
-  marker_positions.each { |m| m[:label_dy] = 4 }
+  # Cluster markers whose x-positions are within CLUSTER_THRESHOLD px.
+  # Markers in the same cluster would overlap visually; their labels get
+  # placed together to the right of the rightmost marker in the cluster,
+  # spaced horizontally on the same line (no vertical stacking; row height
+  # is fixed and vertical labels get clipped). Colors disambiguate which
+  # value belongs to which series.
+  CLUSTER_THRESHOLD = 30
+  clusters = []
+  marker_positions.each do |m|
+    if clusters.empty? || (m[:x] - clusters.last.last[:x]).abs > CLUSTER_THRESHOLD
+      clusters << [m]
+    else
+      clusters.last << m
+    end
+  end
 
-  # Label placement per row (markers sorted left-to-right by x):
-  #   - rightmost marker (or single-marker row): label to the RIGHT of marker
-  #   - everything else (leftmost + middle markers of multi-marker rows): label to the LEFT
-  # This keeps labels from crowding the chart's right edge and avoids overlap
-  # between the rightmost marker's label and the chart border.
-  marker_positions.each_with_index do |m, mi|
-    svg << marker_svg(m[:shape], m[:x], cy, m[:color])
-    lbl        = fmt_ratio(m[:ratio])
-    label_w    = lbl.length * 7
-    is_right   = mi == marker_positions.size - 1   # rightmost (also true for single-marker rows)
-    lx = is_right ? m[:x] + 8 : m[:x] - 8 - label_w
-    svg << %(<text x="#{lx}" y="#{cy + m[:label_dy]}" font-size="10" fill="#{m[:color]}">#{lbl}</text>)
+  clusters.each do |cluster|
+    # Draw markers
+    cluster.each { |m| svg << marker_svg(m[:shape], m[:x], cy, m[:color]) }
+
+    if cluster.size == 1
+      # Singleton — use side rule:
+      #   rightmost marker in the row → label to the RIGHT
+      #   everything else → label to the LEFT
+      m = cluster.first
+      is_rightmost_in_row = m.equal?(marker_positions.last)
+      lbl     = fmt_ratio(m[:ratio])
+      label_w = lbl.length * 7
+      lx = is_rightmost_in_row ? m[:x] + 8 : m[:x] - 8 - label_w
+      svg << %(<text x="#{lx}" y="#{cy + 4}" font-size="10" fill="#{m[:color]}">#{lbl}</text>)
+    else
+      # Clustered overlapping markers — stack labels horizontally to the right
+      # of the rightmost marker, in marker x-order, color-coded.
+      lx = cluster.last[:x] + 8
+      cluster.each do |m|
+        lbl = fmt_ratio(m[:ratio])
+        svg << %(<text x="#{lx}" y="#{cy + 4}" font-size="10" fill="#{m[:color]}">#{lbl}</text>)
+        lx += lbl.length * 7 + 6   # advance past this label + small gap
+      end
+    end
   end
 end
 
