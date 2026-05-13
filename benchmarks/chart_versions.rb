@@ -308,21 +308,12 @@ rows.each_with_index do |row, i|
   # Sort by x for overlap assignment
   marker_positions.sort_by! { |m| m[:x] }
 
-  # Assign label y-offsets to avoid overlap (stack vertically if markers are
-  # within 50px on the x-axis). Each stacked label is 12px below the previous —
-  # enough room for 10pt text without overlap.
-  label_slots = []
-  marker_positions.each do |m|
-    slot = label_slots.find { |s| (s[:last_x] - m[:x]).abs < 50 }
-    if slot
-      slot[:count] += 1
-      slot[:last_x] = m[:x]
-      m[:label_dy] = 4 + slot[:count] * 12
-    else
-      label_slots << { last_x: m[:x], count: 0 }
-      m[:label_dy] = 4
-    end
-  end
+  # One line of labels per row — no vertical stacking. Row height is fixed and
+  # vertical-stacked labels get clipped. Rely on the side-choice rule
+  # (rightmost label → right, others → left) plus marker x-spacing to keep
+  # labels readable. If labels still collide on rows with very close ratios,
+  # consider widening the chart or shortening label text.
+  marker_positions.each { |m| m[:label_dy] = 4 }
 
   # Label placement per row (markers sorted left-to-right by x):
   #   - rightmost marker (or single-marker row): label to the RIGHT of marker
